@@ -131,6 +131,20 @@ REST（均走 `/runx` 前缀）：
 
 ---
 
+## 定时器健壮性
+
+所有定时器时长（`restart_delay_ms` / `cache.*Ttl` / `watch` 防抖间隔等）在进入
+`setTimeout` / `setInterval` 之前都会经 `ctx.os.safeMs(v, default, min, max)` 归一化。
+
+原因：`setTimeout(fn, NaN)` 会让 Node 打印 `TimeoutNaNWarning` 并把时长**静默降级为 1ms**——
+在手机上就是一个空转的 1ms 定时器，持续耗电。而这些时长常来自 `server.json` / `appex.json`，
+可能是字符串、`null`、越界值或 `Infinity`。
+
+归一化规则：非法值（NaN / undefined / null / 非数字字符串 / ±Infinity）→ 回落默认值；
+合法数字 → 夹到 `[min, max]`。保证传给定时器的永远是有限正整数。
+
+---
+
 ## 致谢 / 许可
 
 - 内核改造自 [NavExt](https://github.com/chinartcn/NavExt)（MIT）。
