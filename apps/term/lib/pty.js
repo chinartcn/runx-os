@@ -27,7 +27,15 @@ const DEFAULT_ROWS = 24;
 const IDLE_MS = 30 * 60 * 1000;   // 30 分钟无连接且无输入 → 回收
 const GRACE_MS = 5000;            // conn 全断后宽限
 const KILL_GRACE_MS = 500;        // SIGTERM → SIGKILL 间隔
-const MAX_SESSIONS = Number(process.env.TERM_MAX_SESSIONS) || 8;
+
+/** 定时器时长归一化：非法值（NaN/undefined/字符串）回落默认，防 setTimeout(NaN) → 1ms 空转 */
+function safeMs(v, dflt, min, max) {
+  let n = typeof v === 'string' ? Number(v) : v;
+  if (typeof n !== 'number' || !Number.isFinite(n)) n = dflt;
+  return Math.min(max, Math.max(min, n));
+}
+
+const MAX_SESSIONS = safeMs(Number(process.env.TERM_MAX_SESSIONS), 8, 1, 256);
 
 const newId = () => (crypto.randomUUID ? crypto.randomUUID() : 's' + Date.now() + Math.random().toString(16).slice(2));
 
@@ -255,4 +263,4 @@ class SessionManager {
 function clampCols(c) { const n = parseInt(c, 10); return !n || n < 2 ? DEFAULT_COLS : Math.min(n, 1000); }
 function clampRows(r) { const n = parseInt(r, 10); return !n || n < 1 ? DEFAULT_ROWS : Math.min(n, 1000); }
 
-module.exports = { SessionManager, probeScript, SHELL, MAX_SESSIONS, GRACE_MS };
+module.exports = { SessionManager, probeScript, SHELL, MAX_SESSIONS, GRACE_MS, safeMs };
