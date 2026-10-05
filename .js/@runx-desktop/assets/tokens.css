@@ -120,10 +120,16 @@
   --label-quaternary: rgba(0, 0, 0, 0.22);
   --label-on-accent: #ffffff;
 
-  /* 表面（surface） */
-  --surface-window:  rgba(250, 250, 252, 0.78);  /* 窗口主体：毛玻璃 */
+  /* 表面（surface）
+     ── 关于不透明度和 RunX.UI.md 附录的关系 ──
+     附录给的基准是 rgba(255,255,255,0.7)。这里窗口面用了 0.78，是**有意的偏离**：
+     桌面壁纸是可换的花哨渐变/图片，0.7 的白在亮壁纸上不足以把 13.5px 正文压出
+     足够对比度（§2.2「确保材质上的文字对比度充足」优先于具体数值）。
+     卡片/列表行仍用 0.72，最接近基准值；工具栏 0.72 与卡片一致。
+     模糊量严格照附录 blur(12px)，未改。 */
+  --surface-window:  rgba(250, 250, 252, 0.78);  /* 窗口主体：毛玻璃（基准 0.7 → 0.78，见上） */
   --surface-chrome:  rgba(250, 250, 252, 0.72);  /* 工具栏 / 导航条 / Dock */
-  --surface-card:    rgba(255, 255, 255, 0.72);  /* 卡片 / 列表行 */
+  --surface-card:    rgba(255, 255, 255, 0.72);  /* 卡片 / 列表行（＝附录基准） */
   --surface-sunken:  rgba(0, 0, 0, 0.045);       /* 凹陷区（搜索框、代码块） */
   --surface-hover:   rgba(0, 0, 0, 0.055);
   --surface-active:  rgba(0, 0, 0, 0.10);
@@ -158,42 +164,75 @@
   --icon-label-shadow: 0 1px 3px rgba(0, 0, 0, 0.72);
 }
 
-/* ── 深色 ── */
+/* ── 深色 ──
+ *
+ * 这里是**深色令牌的唯一权威定义处**。深色值只允许在这两个选择器里出现一次：
+ *   · #runx-desktop[data-theme="dark"]  ← 用户在「显示 → 外观」里手动选了深色
+ *   · #runx-desktop[data-theme="auto"]  ← 主题跟随系统，命中了 prefers-color-scheme: dark
+ * 两者必须逐字一致。之所以要写两份、而不是抽成一个变量类，是因为 CSS 没有
+ * 「复用另一个规则块的声明」的语法：@media 里无法引用外部规则块。
+ *
+ * 历史上这里重复过三份（还多了一份在 prefers-contrast 里），结果就是改深色时
+ * 漏掉其中一两处，出现「手动切深色正常、跟随系统反而半亮」这种极难查的 bug。
+ * 现在约定：这份列表是深色令牌全集，任何新增的深色覆盖都必须同时加进下面两个块。
+ * ─────────────────────────────────────────────────────────────────────── */
+
+/* ① 手动深色 */
 #runx-desktop[data-theme="dark"] {
   color-scheme: dark;
 
+  /* 文本层级：与亮色相反，落在白上只改不透明度 */
   --label-primary:   rgba(255, 255, 255, 0.94);
   --label-secondary: rgba(255, 255, 255, 0.62);
   --label-tertiary:  rgba(255, 255, 255, 0.38);
   --label-quaternary: rgba(255, 255, 255, 0.20);
+  --label-on-accent: #ffffff;
 
-  --surface-window: rgba(28, 28, 32, 0.72);
+  /* 表面：深色下「提亮」表达层级，而不是「加深」——所以卡片是白色低透明叠加 */
+  --surface-window: rgba(28, 28, 32, 0.72);   /* 窗口主体（深色下比亮色更透，够暗即可） */
   --surface-chrome: rgba(30, 30, 35, 0.70);
   --surface-card:   rgba(255, 255, 255, 0.06);
   --surface-sunken: rgba(0, 0, 0, 0.28);
   --surface-hover:  rgba(255, 255, 255, 0.085);
   --surface-active: rgba(255, 255, 255, 0.15);
+  --surface-selected: var(--accent-soft);
 
   --hairline:        rgba(255, 255, 255, 0.13);
   --hairline-strong: rgba(255, 255, 255, 0.22);
   --stroke-control:  rgba(255, 255, 255, 0.16);
+  --stroke-focus:    color-mix(in srgb, var(--accent) 68%, transparent);
 
-  --accent:       #4a9eff;
-  --accent-hover: #6bb0ff;
-  --accent-press: #2f80e0;
+  /* 强调色在深色底上要提亮，否则 #0a6cff 在近黑背景上几乎读不出来 */
+  --accent:        #4a9eff;
+  --accent-hover:  #6bb0ff;
+  --accent-press:  #2f80e0;
+  --accent-soft:   color-mix(in srgb, var(--accent) 22%, transparent);
+  --accent-ring:   color-mix(in srgb, var(--accent) 42%, transparent);
 
+  /* 语义色：深色底上同样提亮，保证 4.5:1 以上的正文对比度 */
   --semantic-red:    #ff6b63;
   --semantic-yellow: #ffb340;
   --semantic-green:  #3fd07a;
+  --semantic-blue:   #4a9eff;
 
+  /* 窗口控制点沿用同一组三色（Apple 在深色下也不改这几个色） */
+  --ctl-close: #ff5f57;
+  --ctl-min:   #febc2e;
+  --ctl-max:   #28c840;
+
+  /* 深色下阴影要更重更散，否则窗口和壁纸糊在一起分不出层级 */
   --shadow-window: 0 0 0 0.5px rgba(0,0,0,0.55), 0 14px 32px -6px rgba(0,0,0,0.62),
                    0 36px 72px -20px rgba(0,0,0,0.70);
   --shadow-window-blur: 0 0 0 0.5px rgba(0,0,0,0.45), 0 8px 20px -4px rgba(0,0,0,0.46),
                         0 22px 48px -14px rgba(0,0,0,0.50);
   --shadow-panel: 0 1px 2px rgba(0,0,0,0.4), 0 8px 24px -8px rgba(0,0,0,0.55);
+
+  --icon-label: #ffffff;
+  --icon-label-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
 }
 
-/* ── 跟随系统 ── */
+/* ② 主题跟随系统 + 系统为深色
+ *    值必须与上面 ① 逐字一致。改一处记得改另一处（有测试盯着，见 e2e 的 token 一致性断言）。 */
 @media (prefers-color-scheme: dark) {
   #runx-desktop[data-theme="auto"] {
     color-scheme: dark;
@@ -202,6 +241,7 @@
     --label-secondary: rgba(255, 255, 255, 0.62);
     --label-tertiary:  rgba(255, 255, 255, 0.38);
     --label-quaternary: rgba(255, 255, 255, 0.20);
+    --label-on-accent: #ffffff;
 
     --surface-window: rgba(28, 28, 32, 0.72);
     --surface-chrome: rgba(30, 30, 35, 0.70);
@@ -209,24 +249,36 @@
     --surface-sunken: rgba(0, 0, 0, 0.28);
     --surface-hover:  rgba(255, 255, 255, 0.085);
     --surface-active: rgba(255, 255, 255, 0.15);
+    --surface-selected: var(--accent-soft);
 
     --hairline:        rgba(255, 255, 255, 0.13);
     --hairline-strong: rgba(255, 255, 255, 0.22);
     --stroke-control:  rgba(255, 255, 255, 0.16);
+    --stroke-focus:    color-mix(in srgb, var(--accent) 68%, transparent);
 
-    --accent:       #4a9eff;
-    --accent-hover: #6bb0ff;
-    --accent-press: #2f80e0;
+    --accent:        #4a9eff;
+    --accent-hover:  #6bb0ff;
+    --accent-press:  #2f80e0;
+    --accent-soft:   color-mix(in srgb, var(--accent) 22%, transparent);
+    --accent-ring:   color-mix(in srgb, var(--accent) 42%, transparent);
 
     --semantic-red:    #ff6b63;
     --semantic-yellow: #ffb340;
     --semantic-green:  #3fd07a;
+    --semantic-blue:   #4a9eff;
+
+    --ctl-close: #ff5f57;
+    --ctl-min:   #febc2e;
+    --ctl-max:   #28c840;
 
     --shadow-window: 0 0 0 0.5px rgba(0,0,0,0.55), 0 14px 32px -6px rgba(0,0,0,0.62),
                      0 36px 72px -20px rgba(0,0,0,0.70);
     --shadow-window-blur: 0 0 0 0.5px rgba(0,0,0,0.45), 0 8px 20px -4px rgba(0,0,0,0.46),
                           0 22px 48px -14px rgba(0,0,0,0.50);
     --shadow-panel: 0 1px 2px rgba(0,0,0,0.4), 0 8px 24px -8px rgba(0,0,0,0.55);
+
+    --icon-label: #ffffff;
+    --icon-label-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
   }
 }
 
@@ -476,19 +528,29 @@
     animation-iteration-count: 1 !important;
   }
 }
+/* ── 高对比度（§「无障碍」）
+ *    只覆盖「对比度」本身需要的令牌：描边更实、次级文本更黑、材质更不透明。
+ *    注意这里**不重定义**强调色/语义色/三色控制点 —— 那些与对比度无关，
+ *    在这里重复一遍就等于又开了第三个「改一处漏两处」的口子。
+ *    （历史上这里块抄过一整套深色值，现已删除。）
+ *    另：data-theme="auto" 在系统深色时也应吃到深色高对比覆盖，故一并列出。 */
 @media (prefers-contrast: more) {
   #runx-desktop {
     --hairline: rgba(0, 0, 0, 0.4);
     --stroke-control: rgba(0, 0, 0, 0.45);
+    --label-primary: rgba(0, 0, 0, 0.96);
     --label-secondary: rgba(0, 0, 0, 0.78);
     --label-tertiary: rgba(0, 0, 0, 0.62);
     --surface-window: rgba(252, 252, 254, 0.96);
     --surface-chrome: rgba(252, 252, 254, 0.94);
     --surface-card: rgba(255, 255, 255, 0.98);
   }
-  #runx-desktop[data-theme="dark"] {
+  /* 深色高对比：手动深色 与 系统深色的自动主题，两份同样要一致 */
+  #runx-desktop[data-theme="dark"],
+  #runx-desktop[data-theme="auto"] {
     --hairline: rgba(255, 255, 255, 0.44);
     --stroke-control: rgba(255, 255, 255, 0.48);
+    --label-primary: rgba(255, 255, 255, 0.98);
     --label-secondary: rgba(255, 255, 255, 0.82);
     --label-tertiary: rgba(255, 255, 255, 0.62);
     --surface-window: rgba(20, 20, 24, 0.96);
