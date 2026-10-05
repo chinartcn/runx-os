@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>终端</title>
+<link rel="stylesheet" href="./assets/vendor/xterm.css">
+<link rel="stylesheet" href="./assets/term.css">
+</head>
+<body>
+  <div id="app">
+    <div id="tabs" class="tabs">
+      <div id="tablist" class="tablist"></div>
+      <button id="newtab" class="tab-action" title="新建会话 (Ctrl+Shift+T)">+</button>
+      <div class="spacer"></div>
+      <div id="status" class="status" title="连接状态"><span class="dot"></span><span id="status-text">连接中…</span></div>
+      <button id="font-dec" class="tool" title="减小字号">A−</button>
+      <button id="font-inc" class="tool" title="增大字号">A+</button>
+      <button id="theme-btn" class="tool" title="切换主题">◐</button>
+      <button id="reconnect" class="tool" title="重新连接">⟳</button>
+    </div>
+    <div id="terminals" class="terminals"></div>
+    <div id="hint" class="hint"></div>
+  </div>
+
+  <script src="./assets/vendor/xterm.js"></script>
+  <script src="./assets/vendor/addon-fit.js"></script>
+  <script src="./assets/term.js"></script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+{
+  "config": {
+    "pnpm_path": {
+      "type": "string",
+      "label": "pnpm 可执行路径",
+      "default": "pnpm"
+    },
+    "install_timeout_ms": {
+      "type": "number",
+      "label": "安装超时（毫秒）",
+      "default": 300000,
+      "min": 10000,
+      "max": 600000
+    }
+  }
+}

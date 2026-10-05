@@ -1,0 +1,64 @@
+{
+  "site": {
+    "title": "RunX OS",
+    "description": "网页桌面操作系统 · NavExt 内核改造",
+    "logo": "🪟",
+    "footer": "© 2026 chinartcn · RunX OS",
+    "accent": "#7c5cff",
+    "showStats": false
+  },
+  "ignoreDirs": [
+    "node_modules",
+    ".git",
+    ".js",
+    "docs",
+    "var"
+  ],
+  "ignoreFiles": [
+    "*.tmp.html",
+    "draft-*.html",
+    "server.js",
+    "os.js",
+    ".navext.client.js",
+    "package.json",
+    "server.json",
+    "NavExt.md",
+    "LICENSE",
+    "README.md",
+    "install.sh",
+    "start.sh"
+  ],
+  "home": {
+    "enabled": false,
+    "applyExtensions": true,
+    "file": "home.html",
+    "routes": [
+      {
+        "match": {
+          "path": "/docs"
+        },
+        "file": "docs.html"
+      },
+      {
+        "match": {
+          "path": "/blog"
+        },
+        "file": "blog.html",
+        "applyExtensions": false
+      }
+    ]
+  },
+  "htmlExtensions": [
+    ".html",
+    ".htm"
+  ],
+  "port": 3000,
+  "host": "0.0.0.0",
+  "depth": 8,
+  "cache": {
+    "html": true,
+    "extTtl": 1000,
+    "scanTtl": 400,
+    "cfgTtl": 1000
+  }
+}

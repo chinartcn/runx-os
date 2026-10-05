@@ -1,0 +1,9 @@
+{
+  "name": "挂载点（RunX 内核）",
+  "description": "RunX 挂载点：清单声明 + 运行时注册两级，desktop.widget / taskbar.button / app.background 三类，含 onAppStop 生命周期与归属校验。",
+  "version": "1.0.0",
+  "author": "chinartcn",
+  "enabled": true,
+  "core": true,
+  "order": 25
+}

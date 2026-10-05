@@ -1,0 +1,99 @@
+/* RunX 终端 —— 与桌面 Liquid Glass 风格协调 */
+
+:root {
+  --glass-bg: rgba(10, 14, 26, 0.72);
+  --glass-border: rgba(255, 255, 255, 0.12);
+  --tab-bg: rgba(255, 255, 255, 0.04);
+  --tab-active: rgba(120, 170, 255, 0.18);
+  --fg: #d7e0f5;
+  --fg-dim: #7b88a8;
+  --accent: #6aa8ff;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0; padding: 0; height: 100%;
+  background: transparent;
+  color: var(--fg);
+  font-family: -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  overflow: hidden;
+}
+
+#app {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column;
+  background: var(--glass-bg);
+  backdrop-filter: blur(18px) saturate(1.2);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+/* ── 标签栏 ── */
+.tabs {
+  display: flex; align-items: center; gap: 4px;
+  height: 36px; padding: 0 8px;
+  border-bottom: 1px solid var(--glass-border);
+  background: rgba(255, 255, 255, 0.02);
+  flex: 0 0 auto;
+  user-select: none;
+}
+.tablist { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; }
+.tablist::-webkit-scrollbar { display: none; }
+
+.tab {
+  display: flex; align-items: center; gap: 6px;
+  padding: 5px 10px; border-radius: 8px;
+  font-size: 12px; color: var(--fg-dim);
+  background: var(--tab-bg); cursor: pointer;
+  white-space: nowrap; max-width: 180px;
+}
+.tab:hover { color: var(--fg); }
+.tab.active { background: var(--tab-active); color: var(--fg); }
+.tab .tlabel { overflow: hidden; text-overflow: ellipsis; }
+.tab .tx { opacity: 0.5; font-size: 14px; line-height: 1; padding: 0 2px; }
+.tab .tx:hover { opacity: 1; color: #ff7b7b; }
+
+.tab-action, .tool {
+  background: transparent; border: 1px solid transparent;
+  color: var(--fg-dim); border-radius: 7px;
+  width: 28px; height: 26px; cursor: pointer; font-size: 13px;
+  display: inline-flex; align-items: center; justify-content: center;
+  flex: 0 0 auto;
+}
+.tab-action:hover, .tool:hover { color: var(--fg); background: var(--tab-bg); border-color: var(--glass-border); }
+.spacer { flex: 1 1 auto; }
+
+.status { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--fg-dim); padding: 0 6px; }
+.status .dot { width: 7px; height: 7px; border-radius: 50%; background: #c9a227; box-shadow: 0 0 6px currentColor; }
+.status.ok .dot { background: #4ec26a; }
+.status.bad .dot { background: #e2595b; }
+
+/* ── 终端区 ── */
+.terminals { flex: 1 1 auto; position: relative; overflow: hidden; }
+.term-host { position: absolute; inset: 0; padding: 6px 8px; display: none; }
+.term-host.active { display: block; }
+.term-host .xterm { height: 100%; }
+.term-host .xterm-viewport { background: transparent !important; }
+
+/* ── 提示条 ── */
+.hint {
+  position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%);
+  background: rgba(0,0,0,0.6); color: var(--fg);
+  font-size: 12px; padding: 6px 12px; border-radius: 8px;
+  border: 1px solid var(--glass-border);
+  opacity: 0; transition: opacity .2s; pointer-events: none;
+}
+.hint.show { opacity: 1; }
+
+/* 浅色主题（页面级微调，终端配色由 xterm theme 控制） */
+body.theme-light {
+  --glass-bg: rgba(248,250,255,0.82);
+  --glass-border: rgba(0,0,0,0.10);
+  --tab-bg: rgba(0,0,0,0.04);
+  --tab-active: rgba(80,130,255,0.16);
+  --fg: #1c2436;
+  --fg-dim: #5a6478;
+}

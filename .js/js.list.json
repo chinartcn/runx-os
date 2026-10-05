@@ -1,0 +1,7 @@
+[
+  "@runx-supervisor",
+  "@runx-pax",
+  "@runx-event-bus",
+  "@runx-desktop",
+  "@runx-mounts"
+]

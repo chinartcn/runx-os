@@ -1,0 +1,9 @@
+{
+  "name": "事件总线（RunX 内核）",
+  "description": "RunX 事件总线：WS 主通道 + HTTP 兜底，命名空间强制校验、通配符订阅、ring buffer 与 JSONL 落盘。",
+  "version": "1.0.0",
+  "author": "chinartcn",
+  "enabled": true,
+  "core": true,
+  "order": 30
+}

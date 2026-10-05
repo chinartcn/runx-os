@@ -1,0 +1,9 @@
+{
+  "name": "进程监管（RunX 内核）",
+  "description": "RunX 进程生命周期 / 重启策略 / 重启预算 / 日志重定向，并提供 /runx/apps 应用管理 API。",
+  "version": "1.0.0",
+  "author": "chinartcn",
+  "enabled": true,
+  "core": true,
+  "order": 10
+}

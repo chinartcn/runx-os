@@ -1,0 +1,9 @@
+{
+  "name": "包管理（RunX 内核）",
+  "description": "RunX PaX 包管理：tarball 安全解包、pnpm install、写 apps.json，并支持 update / uninstall。",
+  "version": "1.0.0",
+  "author": "chinartcn",
+  "enabled": true,
+  "core": true,
+  "order": 20
+}

@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "name": "term",
+  "version": "1.0.0",
+  "type": "node",
+  "entry": "app.js",
+  "port": 3460,
+  "display_name": "终端",
+  "icon": "icon.svg",
+  "description": "RunX 真实交互式终端（script 伪 PTY + xterm.js，零原生依赖）",
+  "restart": "on-failure",
+  "restart_delay_ms": 1000,
+  "restart_max": 5,
+  "restart_window_ms": 60000,
+  "autostart": true,
+  "data_dir": "data",
+  "env": {
+    "TERM_SHELL_ARGS": "--norc --noprofile"
+  }
+}
