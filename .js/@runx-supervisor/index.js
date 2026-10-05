@@ -101,7 +101,7 @@ module.exports = {
     function scheduleRestart(name, entry) {
       const rt = runtime.get(name);
       if (!rt) return;
-       const max = entry.restart_max || 5;
+      const max = entry.restart_max || 5;
       const win = entry.restart_window_ms || 60000;
       const now = Date.now();
       rt._restartTs = (rt._restartTs || []).filter((t) => now - t < win);
@@ -112,7 +112,8 @@ module.exports = {
         return;
       }
       rt.state = 'restarting';
-      const delay = entry.restart_delay_ms || 1000;
+      // 时长可能来自 apps.json（字符串/缺失/越界），统一归一化，防 setTimeout(NaN) → 1ms 空转
+      const delay = os.safeMs(entry.restart_delay_ms, 1000, 0, 600000);
       os.ipc.emit('app:restarting', name);
       setTimeout(() => {
         const cur = runtime.get(name);
