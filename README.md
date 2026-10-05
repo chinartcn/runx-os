@@ -17,6 +17,31 @@ curl -fsSL https://raw.githubusercontent.com/chinartcn/runx-os/main/install.sh |
 - **桌面**：http://localhost:3000/
 - **内置终端**：http://localhost:3460/ （桌面双击「终端」图标也可）
 
+### 国内网络 / 加速镜像
+
+安装脚本会**自动依次尝试「直连 GitHub → 多个加速镜像」**，克隆失败还会回退到 tarball 下载（无需 git）。若 `raw.githubusercontent.com` 本身被墙，用镜像版一行命令：
+
+```bash
+# 方式 A：gh-proxy 加速（注意镜像地址要拼两遍 https）
+curl -fsSL https://gh-proxy.org/https://raw.githubusercontent.com/chinartcn/runx-os/main/install.sh | bash
+
+# 方式 B：jsDelivr CDN
+curl -fsSL https://cdn.jsdelivr.net/gh/chinartcn/runx-os@main/install.sh | bash
+
+# 方式 C：手动指定克隆镜像
+RUNX_MIRROR=https://gh-proxy.org/ bash install.sh
+```
+
+内置镜像列表（按序尝试）：`github.com` 直连 → `gh-proxy.org` → `ghproxy.net` → `ghfast.top` → `codeload.github.com` tarball。
+
+环境变量：
+
+| 变量 | 说明 |
+|---|---|
+| `RUNX_MIRROR=<前缀>` | 只用指定镜像（如 `https://gh-proxy.org/`），跳过直连与自动探测 |
+| `RUNX_MIRROR=off` | 只用 GitHub 直连，不走任何镜像 |
+| `RUNX_BRANCH=<分支>` | 指定分支，默认 `main` |
+
 也可手动：
 
 ```bash
@@ -26,7 +51,7 @@ cd runx-os
 PORT=8080 ./start.sh       # 自定义端口
 ```
 
-要求：Node.js ≥ 14（桌面用到的 `ctx.fetch` 需要 ≥ 18），`git`，`bash`。
+要求：Node.js ≥ 14（桌面用到的 `ctx.fetch` 需要 ≥ 18），`bash`，以及 `git` 或 `curl` 二选一。
 
 ---
 
