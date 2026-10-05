@@ -65,7 +65,8 @@ RunX OS
 │   ├── @runx-supervisor   应用生命周期（启动 / 停止 / 重启 / autostart / 崩溃自愈）
 │   ├── @runx-pax          应用安装（tarball / 目录安全解包 → appex.json → apps.json）
 │   ├── @runx-event-bus    内核内事件总线（app:started / app:stopped / desktop:changed …）
-│   ├── @runx-desktop      桌面 UI（图标 / 窗口 / 任务栏 / 壁纸），iframe 隔离加载应用
+│   ├── @runx-desktop      桌面 UI（导航条 / 菜单栏 / 可拖拽窗口 / Dock / 图标网格）
+│   │   └── assets/        设计令牌 + Inter 可变字体（拉丁子集）
 │   └── @runx-mounts       @runx-mounts 挂载点（文档 §7）
 ├── apps/            已部署应用（当前内置 term）
 │   └── term/        RunX 真实交互式终端（script 伪 PTY + xterm.js）
@@ -123,11 +124,68 @@ REST（均走 `/runx` 前缀）：
 
 ---
 
+## 桌面 UI 与窗口
+
+桌面外壳（`@runx-desktop`）按 `docs/RunX.UI.md` 设计规范实现：Apple HIG + Liquid Glass。
+
+**布局三层**
+
+| 层 | 元素 | 说明 |
+|---|---|---|
+| 顶部 | `.rx-menubar` | 固定在顶部的 Flexbox 导航条（细分割线），承载品牌标记与菜单栏 |
+| 中间 | `.rx-surface` | 桌面内容层：图标网格 |
+| 底部 | `.rx-dock` | 浮动 Liquid Glass 材质应用坞；已打开的应用 + 未打开应用的启动器 |
+
+**菜单栏**（§3.2，核心交互范式）：`RunX OS / 文件 / 编辑 / 显示 / 窗口 / 帮助`，共 40+ 条命令。
+`窗口` 菜单实时列出所有窗口；`显示` 菜单管工具栏样式与浅色/深色/跟随系统。
+
+**窗口能力**（§3.1：调整大小、隐藏、显示、移动、全屏）
+
+| 操作 | 手势 |
+|---|---|
+| 移动 | 拖标题栏（最大化状态下拖动会先还原成窗口再跟手） |
+| 调整大小 | 八向手柄（四边 + 四角），带 280×180 最小尺寸与视口约束 |
+| 最大化 | 绿点单击 / 双击标题栏 / `⌘⌃M` |
+| 全屏 | 绿点双击 / 工具栏全屏按钮 / `⌘⌃F` / `Esc` 退出 |
+| 最小化 | 黄点 / `⌘M`（内容继续跑，收进 Dock） |
+| 隐藏 | `⌘H` / 应用菜单「隐藏」；`⌘⌥H` 隐藏其他 |
+| 关闭 | 红点 / `⌘W`（销毁窗口，node 应用进程仍由 supervisor 托管） |
+
+工具栏支持三种样式（§3.1 / §3.3）：`unified` 统一、`unifiedCompact` 紧凑、`expanded` 展开。
+窄屏（≤680px）自动用紧凑样式并隐藏分段控件——次要操作降级到「显示」菜单（§3.3）。
+
+**设计令牌**（`assets/tokens.css`）
+
+- **字体**：Inter 可变字体（`wght 100–900` / `opsz 14–32`），拉丁子集 woff2 仅 103KB，
+  加载失败立刻回落系统字体栈，不阻塞渲染。中文由系统字体承担，不会出豆腐块。
+- **等宽数字**：全局 `font-feature-settings: "tnum"` —— 时钟、尺寸、日志行不抖动。
+- **语义化文本**：`.title / .subtitle / .body / .caption / .status / .section-label`；
+  字号行高字重收在 `--font-title / --font-body` 等层级变量里，不散落硬编码。
+- **语义色**：`--label-primary/secondary/tertiary` 三级文本；`--accent` 只用于选中与有意义的强调；
+  语义红/黄/绿仅传达状态。浅色 / 深色 / 跟随系统三套，另适配 `prefers-contrast: more`。
+- **同心圆角**：`border-radius: calc(var(--outer-radius) - var(--padding))`，
+  嵌套元素曲率对齐（菜单 10px → 菜单项 5px，Dock 胶囊 → 条目胶囊）。
+- **材质**：`backdrop-filter: blur(12px)` + `rgba(255,255,255,0.7)`；三档材质禁止叠加，
+  不支持 `backdrop-filter` 的环境自动回落到不透明面。
+
+**前端资源的送达方式**（一个不太显然的工程点）
+
+内核把扩展的 `styles`/`scripts` **内联**进 HTML，而扩展目录位于 `.js/`（以点开头，静态路由一律拒绝）。
+于是 CSS 里的 `url()` 引用（字体、图标）没有可达地址。桌面扩展因此自己注册了
+`GET /runx/desktop-assets/*`：白名单扩展名 + 正确 MIME（woff2 必须有，否则字体静默失效）+
+ETag 304 协商。内联的 CSS 在导出前会把相对 `url()` 改写成绝对前缀——
+注意 CSS 里的相对地址是按 **CSS 文件自身所在目录** 解析的（`assets/tokens.css` 里写
+`fonts/x.woff2` 实际指向 `assets/fonts/x.woff2`），所以重写时要带上基准目录。
+
+---
+
 ## 已知局限
 
 1. **resize 会重建终端会话**：前台交互程序（`vim`/`top`/`ssh`）会重启。这是零原生依赖（不用 node-pty）的固有取舍。
 2. **Termux / Android 上的 `fs.watch` 不可靠**：`watch` 已内置防抖 + 基于 `fs.stat` 的降级轮询兜底。
 3. **单机单用户假设**：内核未内置鉴权；若要暴露到公网，请置于反向代理 + 鉴权之后。
+4. **窗口几何不持久化**：图标坐标、壁纸、主题、Dock、网格尺寸都写回 `var/runx/desktop.json`；
+   但窗口的位置/大小/层级只是会话状态，刷新即回到默认排布（`desktop.windows` 留给后续版本）。
 
 ---
 
