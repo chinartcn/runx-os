@@ -7,10 +7,37 @@
  * 客户端：注入可拖拽 / 缩放 / 最小化的窗口管理器 + 任务栏 + 图标网格（client.js）。
  *
  * REST 走 /runx 前缀（NavExt 内核自留 /api/*）。
+ *
+ * ── 前端资源为什么要经 onRequest 自己发（而不是丢进 js.json.styles）──
+ * 内核的注入把 styles / scripts 一律作为「文本」内联进 HTML，扩展目录又位于
+ * `.js/`（以点开头 → 静态路由一律拒绝）。于是 CSS 里的 url() 引用（Inter 字体、
+ * 品牌图标）没有可达的地址。这里注册一条 /runx/desktop-assets/*：
+ *   · 目录穿越被 fsResolveUnder 兜住；
+ *   · 白名单扩展名 + 正确 MIME（woff2 必须有，否则字体静默失效）；
+ *   · ETag/If-None-Match 304，字体与 CSS 只传一次（手机流量友好）。
  */
 
 const API = '/runx';
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+
+const ASSETS_PREFIX = API + '/desktop-assets/';
+
+/** 白名单：只发前端资源，避免把扩展目录变成可浏览的文件系统 */
+const ASSET_MIME = {
+  '.css': 'text/css; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.webp': 'image/webp',
+  '.woff2': 'font/woff2',
+  '.woff': 'font/woff',
+  '.ttf': 'font/ttf',
+  '.otf': 'font/otf',
+  '.json': 'application/json; charset=utf-8',
+};
 
 let S = null;
 
@@ -26,6 +53,33 @@ function json(status, obj) {
 function err(code, message, data) {
   return { status: code, type: 'application/json; charset=utf-8', body: JSON.stringify({ error: { code, message, data } }) };
 }
+/**
+ * 把 CSS 里的相对 url() 改成绝对前缀。
+ *
+ * 两个坑叠在一起，所以必须显式传 cssRel：
+ *   1. 内核把扩展的 styles 内联进 HTML，url("fonts/x.woff2") 的解析基准变成
+ *      **页面地址**（站点根），而不是扩展目录 —— 字体必然 404；
+ *   2. CSS 里的相对地址按 **CSS 文件自身所在目录** 解析。tokens.css 位于
+ *      assets/，它写的 "fonts/x.woff2" 实际指向 assets/fonts/x.woff2。
+ * 所以要按 cssRel 的目录名拼前缀，不能一律当成扩展根。
+ *
+ * 只处理相对路径；data: / http(s) / 协议相对 / 绝对路径 原样保留。
+ *
+ * @param {string} css      CSS 文本
+ * @param {string} [cssRel] CSS 文件相对扩展目录的路径（用于算基准目录）
+ */
+function rewriteCssUrls(css, cssRel) {
+  const dir = cssRel ? path.posix.dirname(String(cssRel).replace(/\\/g, '/')) : '';
+  const base = (dir && dir !== '.') ? dir.replace(/^\/+|\/+$/g, '') + '/' : '';
+  return css.replace(/url\(\s*(['"]?)([^'")]+)\1\s*\)/g, (whole, quote, ref) => {
+    const v = ref.trim();
+    if (!v) return whole;
+    if (/^(?:[a-z][a-z0-9+.-]*:|\/\/|\/|#|data:)/i.test(v)) return whole;
+    const rel = base + v.replace(/^\.\//, '');
+    return 'url("' + ASSETS_PREFIX + rel + '")';
+  });
+}
+
 function defaultDesktop() {
   return {
     schema: 1, updated_at: Date.now(),
@@ -51,8 +105,26 @@ function nextFreeCell(d) {
 
 module.exports = {
 
+  /**
+   * 内联样式：直接导出内容而不是让 js.json 读文件。
+   *
+   * 为什么要绕这一下：内核把 styles 内联进 HTML 的 <style>，此时 CSS 里的
+   * url("fonts/x.woff2") 按**页面地址**解析（站点根），扩展目录在 .js/ 下
+   * 又被静态路由拒绝 → 字体必然 404。这里在导出前把相对 url() 改写成
+   * /runx/desktop-assets/ 绝对前缀，注入后即可正常取到字体。
+   */
+  get styles() {
+    const read = (rel) => {
+      try { return rewriteCssUrls(fs.readFileSync(path.join(__dirname, rel), 'utf8'), rel); }
+      catch { return ''; }
+    };
+    // tokens.css 必须排在前面：styles.css 全程消费它的变量
+    return [read('assets/tokens.css'), read('styles.css')].filter(Boolean);
+  },
+
   onInit(ctx) {
     const os = ctx.os;
+    const extDir = ctx.extDir;
 
     function load() {
       const d = os.readState('desktop.json', null);
@@ -142,19 +214,105 @@ module.exports = {
       save(d);
       return d.taskbar;
     }
+    /** 网格尺寸：cell 是单元格边长，gap 是单元格间距（两者之和＝步长） */
+    function setGrid(body) {
+      const d = load();
+      const g = d.grid || { cell: 96, gap: 8 };
+      const clampNum = (v, min, max, dflt) => {
+        const n = Number(v);
+        return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : dflt;
+      };
+      if (body.cell != null) g.cell = clampNum(body.cell, 48, 240, 96);
+      if (body.gap != null) g.gap = clampNum(body.gap, 0, 64, 8);
+      d.grid = g;
+      save(d);
+      return d.grid;
+    }
+
+    /* 桌面自述信息：客户端据此拼资源地址与版本（便于以后做热重载/灰度） */
+    function meta() {
+      const pkgVersion = (() => {
+        try { return JSON.parse(fs.readFileSync(path.join(extDir, 'mod.json'), 'utf8')).version || ''; }
+        catch { return ''; }
+      })();
+      return {
+        assets_base: ASSETS_PREFIX,
+        version: pkgVersion,
+        // 客户端能力位：UI 层据此决定是否渲染扩展面板（现在只有基础外壳）
+        capabilities: ['windows.drag', 'windows.resize', 'windows.fullscreen', 'menubar', 'toolbar'],
+      };
+    }
 
     S = {
       json, err, load, save, addIcon, patchIcon, delIcon,
-      addWidget, patchWidget, delWidget, setWallpaper, setTheme, setTaskbar,
+      addWidget, patchWidget, delWidget, setWallpaper, setTheme, setTaskbar, setGrid, meta,
     };
+
+    /* ── 前端资源：把扩展目录里白名单内的文件按正确 MIME 发出去 ──
+       路径解析交给 ctx.fs.path()（内核已做越界 + 软链校验），这里只管 MIME 与缓存。 */
+    function serveAsset(relRaw, reqEth) {
+      const rel = String(relRaw || '').replace(/\\/g, '/').replace(/^\/+/, '');
+      if (!rel || rel.includes('\0')) return assetText(404, '找不到该资源');
+
+      const dot = rel.lastIndexOf('.');
+      const type = dot < 0 ? null : ASSET_MIME[rel.slice(dot).toLowerCase()];
+      if (!type) return assetText(404, '不支持的类型');
+
+      let full;
+      try { full = ctx.fs.path(rel); }
+      catch (e) { return assetText(403, '禁止访问'); }
+
+      let st;
+      try { st = fs.statSync(full); } catch { return assetText(404, '找不到该资源'); }
+      if (!st.isFile()) return assetText(404, '不是文件');
+
+      // ETag 用 mtime+size：内容改动即失效，不必额外记账
+      const etag = '"' + st.mtimeMs.toString(36) + '-' + st.size.toString(36) + '"';
+      const headers = {
+        'Content-Type': type,
+        'ETag': etag,
+        // 资源本身用 ETag 协商，禁止启发式缓存，避免改样式后手机上看到旧的
+        'Cache-Control': 'no-cache',
+        'X-Content-Type-Options': 'nosniff',
+      };
+      if (reqEth && reqEth === etag) return { status: 304, headers, body: '' };
+
+      return { status: 200, headers, body: fs.readFileSync(full) };
+    }
+
+    function assetText(status, text) {
+      return { status, headers: { 'Content-Type': 'text/plain; charset=utf-8' }, body: text };
+    }
+
+    S.serveAsset = serveAsset;
   },
 
   onRequest(req, url, ctx) {
     const p = url.pathname;
+    if (!p.startsWith(API)) return undefined;   // 其它 /runx/* 交给兄弟扩展
     if (!S) return undefined;
     const q = (k) => url.searchParams.get(k);
 
-    if (req.method === 'GET' && p === API + '/desktop') return S.json(200, S.load());
+    /* 前端资源：/runx/desktop-assets/<相对扩展目录的路径> */
+    if (p.startsWith(ASSETS_PREFIX)) {
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        return { status: 405, headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Allow': 'GET, HEAD' }, body: '405' };
+      }
+      const rel = decodeURIComponent(p.slice(ASSETS_PREFIX.length));
+      const r = S.serveAsset(rel, req.headers['if-none-match']);
+      // CSS 里的 url() 是相对扩展目录写的，但内核把 CSS 内联进 HTML，
+      // 相对路径会解析成站点根 → 字体必然 404。服务时统一改写成绝对前缀。
+      if (r.status === 200 && typeof r.body === 'string' && /\.css$/i.test(rel)) {
+        return Object.assign({}, r, { body: rewriteCssUrls(r.body, rel) });
+      }
+      return r;
+    }
+
+    if (req.method === 'GET' && p === API + '/desktop') {
+      // 把自述信息一并带回：客户端不需要额外一次请求
+      return S.json(200, Object.assign({}, S.load(), { meta: S.meta() }));
+    }
+    if (req.method === 'GET' && p === API + '/desktop/meta') return S.json(200, S.meta());
 
     if (req.method === 'POST' && p === API + '/desktop/icons') {
       return Promise.resolve(ctx.readJson().catch(() => ({}))).then((b) => {
@@ -201,6 +359,11 @@ module.exports = {
     if (req.method === 'PUT' && p === API + '/desktop/taskbar') {
       return Promise.resolve(ctx.readJson().catch(() => ({}))).then((b) => {
         try { return S.json(200, S.setTaskbar(b)); } catch (e) { return S.err(422, e.message); }
+      });
+    }
+    if (req.method === 'PUT' && p === API + '/desktop/grid') {
+      return Promise.resolve(ctx.readJson().catch(() => ({}))).then((b) => {
+        try { return S.json(200, S.setGrid(b)); } catch (e) { return S.err(422, e.message); }
       });
     }
 
