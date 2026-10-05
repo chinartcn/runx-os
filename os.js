@@ -69,6 +69,23 @@ function init(App) {
     }
   }
 
+  /**
+   * 定时器时长的安全归一化。
+   *
+   * 为什么要它：`setTimeout(fn, NaN)` 会触发 Node 的 TimeoutNaNWarning 并把时长
+   * 静默降级成 1ms —— 在手机上就是一个空转的 1ms 定时器（白耗电）。时长常来自
+   * config.json / appex.json，可能是字符串、undefined、越界值或 Infinity。
+   * 这里统一夹到 [min, max]，非法值回落到 dflt。
+   */
+  function safeMs(v, dflt, min, max) {
+    let n = typeof v === 'string' ? Number(v) : v;
+    if (typeof n !== 'number' || !Number.isFinite(n)) n = dflt;
+    if (n < min) n = min;
+    if (n > max) n = max;
+    return n;
+  }
+
+
   /* ── A. 进程监管 ── */
   const procs = new Map(); // name -> child
 
@@ -268,6 +285,7 @@ function init(App) {
   //     故：watch 内置防抖，且支持 opts.poll 强制降级到基于 fs.stat 的轮询。
   //     回调统一签名：cb(eventType, changedFiles: string[])
   function startPolling(rel, cb, interval) {
+    interval = safeMs(interval, 1000, 100, 300000);
     const full = resolveUnderRoot(rel);
     if (!fs.existsSync(full)) fs.mkdirSync(full, { recursive: true });
 
@@ -312,8 +330,8 @@ function init(App) {
 
   function watch(rel, cb, opts) {
     opts = opts || {};
-    const debounceMs = Number.isFinite(opts.debounce) ? opts.debounce : 120;
-    const interval = Number.isFinite(opts.interval) ? opts.interval : 1000;
+    const debounceMs = safeMs(opts.debounce, 120, 0, 60000);
+    const interval = safeMs(opts.interval, 1000, 100, 300000);
 
     if (opts.poll) return startPolling(rel, cb, interval);
 
@@ -359,7 +377,7 @@ function init(App) {
   // 显式轮询入口（基于 fs.stat 的降级方案）
   function poll(rel, cb, opts) {
     opts = opts || {};
-    const interval = Number.isFinite(opts.interval) ? opts.interval : 1000;
+    const interval = safeMs(opts.interval, 1000, 100, 300000);
     return startPolling(rel, cb, interval);
   }
 
@@ -369,10 +387,11 @@ function init(App) {
 
   // B4. schedule：系统级周期任务，不受扩展重载影响（R.gc / 日志轮转）
   function schedule(fn, ms) {
+    const period = safeMs(ms, 60000, 100, 24 * 3600 * 1000);
     const id = setInterval(() => {
       try { fn(); }
       catch (e) { logAppend('os', 'schedule error: ' + e.message); }
-    }, ms);
+    }, period);
     if (id.unref) id.unref();
     return id;
   }
@@ -534,6 +553,7 @@ function init(App) {
       ws: { register: wsRegister, clients: () => allSockets.size, broadcast },
       // B 组
       exec, watch, poll, schedule, listen, secret, files, gc,
+      safeMs,   // 定时器时长归一化（防 setTimeout(NaN) → 1ms 空转）
       ipc: {
         on: (e, h) => ipc.on(e, h),
         off: (e, h) => ipc.off(e, h),
@@ -545,7 +565,7 @@ function init(App) {
   return {
     onUpgrade, forExt, wsRegister, broadcast,
     spawn, terminate, writeState, readState,
-    exec, watch, poll, schedule, listen, secret, files, gc, ipc,
+    exec, watch, poll, schedule, listen, secret, files, gc, ipc, safeMs,
   };
 }
 
