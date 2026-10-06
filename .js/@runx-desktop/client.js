@@ -331,14 +331,38 @@
     var n = parseFloat(v);
     return isFinite(n) && n > 0 ? n : fallback;
   }
-  function navbarH() { return metric('--navbar-h', 40); }
-  /** 真实可视区（物理像素） */
+  function navbarH() {
+    // 量真实渲染高度：窄屏媒体查询改了 --navbar-h，且刘海屏要含安全区预留，
+    // 直接量 menubar 比读变量更准，workArea 也不用再手动加 safe-area。
+    var mb = root.querySelector('.rx-menubar');
+    if (mb) { var r = mb.getBoundingClientRect(); if (r.height > 0) return r.height; }
+    return metric('--navbar-h', 40);
+  }
+  /** 真实可视区（物理像素）。
+   *  优先用 visualViewport：手机上地址栏收起、软键盘弹起时，布局视口
+   *  (innerWidth/innerHeight) 可能纹丝不动，但「可见区域」确实变小了 ——
+   *  window.resize 不触发，visualViewport 才会。 */
   function physViewport() {
+    var vv = window.visualViewport;
+    if (vv && vv.width && vv.height) return { w: vv.width, h: vv.height };
     return { w: root.clientWidth || window.innerWidth, h: root.clientHeight || window.innerHeight };
+  }
+  /**
+   * 手机上的分辨率回退：视口窄于 680 且配置的是桌面尺寸预设（宽 > 680）时，
+   * 本地回退为「自适应」—— 1280×800 的桌面在 390px 宽的手机上会被等比缩到
+   * 30%，导航条和 Dock 小到没法点。配置本身不动（回到桌面端仍然生效），
+   * 只在手机显示时临时按物理视口排布；想看「手机分辨率桌面」可显式选
+   * 414×896 这类窄预设，不会被回退。
+   */
+  function mobileAutoOverride() {
+    if (!narrow()) return false;
+    var d = cfg && cfg.display;
+    return !!(d && d.preset && d.preset !== 'auto' && d.w > 680);
   }
   /** 逻辑桌面尺寸：设了虚拟分辨率就用它，否则等于物理视口（自适应） */
   function viewport() {
     var d = cfg && cfg.display;
+    if (mobileAutoOverride()) return physViewport();
     if (d && d.preset && d.preset !== 'auto' && d.w > 0 && d.h > 0) {
       return { w: d.w, h: d.h };
     }
@@ -347,6 +371,7 @@
   /** 当前缩放比：逻辑 → 物理 */
   function displayScale() {
     var d = cfg && cfg.display;
+    if (mobileAutoOverride()) return 1;
     if (!d || !d.preset || d.preset === 'auto' || !(d.w > 0 && d.h > 0)) return 1;
     if (d.scale === 'fit' || d.scale == null) {
       var pv = physViewport();
@@ -412,6 +437,24 @@
         badge.dataset.show = '0';
       }
     }
+  }
+
+  /**
+   * 让 #runx-desktop 贴合真实可视区（visualViewport）。
+   * 手机上地址栏收起 / 软键盘弹起会让「可见区域」偏离布局视口：
+   * visualViewport.offsetTop 在键盘顶起时变大、width/height 变小。
+   * 把桌面钉在可视区矩形内，窗口与 Dock 就不会被键盘盖住。
+   * 桌面端或无键盘时 vv 等于布局视口，效果等同 CSS 的 inset:0。
+   */
+  function applyViewportFrame() {
+    var vv = window.visualViewport;
+    if (!vv) return;                       // 旧浏览器：交给 CSS 的 inset:0
+    root.style.left = (vv.offsetLeft || 0) + 'px';
+    root.style.top = (vv.offsetTop || 0) + 'px';
+    root.style.width = vv.width + 'px';
+    root.style.height = vv.height + 'px';
+    root.style.right = 'auto';
+    root.style.bottom = 'auto';
   }
 
   /* ═══════════════════════════════════════════════════════════════════
@@ -1925,6 +1968,7 @@
   /* ── 弹窗（用桌面自己的材质，不调原生 alert）── */
   function confirmAction(title, body, onOk) {
     var back = el('div');
+    back.className = 'rx-modal-back';
     back.style.cssText = 'position:absolute;inset:0;display:grid;place-items:center;z-index:600;' +
       'background:rgba(0,0,0,0.28);backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px)';
     var card = el('div', 'rx-material-thick');
@@ -1945,6 +1989,7 @@
     row.appendChild(cancel); row.appendChild(ok);
     card.appendChild(row);
     back.appendChild(card);
+    back.__close = done;
     vscreen.appendChild(back);
 
     function done(go) {
@@ -1965,6 +2010,7 @@
 
   function sheet(title, bodyNode, actions) {
     var back = el('div');
+    back.className = 'rx-modal-back';
     back.style.cssText = 'position:absolute;inset:0;display:grid;place-items:center;z-index:600;' +
       'background:rgba(0,0,0,0.28);backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px)';
     var card = el('div', 'rx-material-thick');
@@ -1984,6 +2030,7 @@
     card.appendChild(head);
     card.appendChild(bodyNode);
     back.appendChild(card);
+    back.__close = done;
     vscreen.appendChild(back);
     function done() { back.remove(); document.removeEventListener('keydown', onKey, true); }
     function onKey(e) { if (e.key === 'Escape') { e.stopPropagation(); done(); } }
@@ -2312,7 +2359,10 @@
     body.appendChild(sRow);
     body.appendChild(el('div', 'caption',
       '当前逻辑桌面 ' + viewport().w + ' × ' + viewport().h +
-      '，缩放 ' + Math.round(displayScale() * 100) + '%。手机横竖屏切换后会自动重算。'));
+      '，缩放 ' + Math.round(displayScale() * 100) + '%。手机横竖屏切换后会自动重算。' +
+      (mobileAutoOverride()
+        ? '手机上已临时回退为自适应（原设置保留，桌面端不受影响）。'
+        : '')));
 
     /* ── 新建窗口的默认尺寸 ── */
     body.appendChild(el('div', 'section-label', '新窗口默认尺寸'));
@@ -2859,33 +2909,103 @@
   }
 
   /* ═══════════════════════════════════════════════════════════════════
-   * 视口变化：窗口重新约束在可视区内（手机旋屏常见）
+   * 视口变化：窗口重新约束在可视区内
+   * （手机旋屏 / 软键盘弹起 / 地址栏伸缩都会触发，不止 resize）
    * ═══════════════════════════════════════════════════════════════════ */
   var resizeTimer = null;
-  window.addEventListener('resize', function () {
+  function relayout() {
+    // 先重算虚拟显示器的缩放与居中、把桌面钉到真实可视区，
+    // 再按新的可用区夹取窗口 —— 顺序反了会用旧坐标系算出错误位置。
+    applyDisplay();
+    applyViewportFrame();
+    var wa = workArea();
+    order.forEach(function (id) {
+      var rec = windows[id];
+      if (!rec) return;
+      if (rec.fullscreen) { applyGeom(rec, { x: 0, y: 0, w: viewport().w, h: viewport().h }); return; }
+      if (rec.maximized) { applyGeom(rec, { x: wa.left, y: wa.top, w: wa.w, h: wa.h }); return; }
+      var g = currentGeom(rec);
+      var w = Math.min(g.w, wa.w);
+      var h = Math.min(g.h, wa.h);
+      // 与拖动同一套约束：保证标题栏至少有 120px（或半宽）留在视口里
+      var keepH = Math.min(120, w * 0.5);
+      var x = clamp(g.x, -(w - keepH), Math.max(0, wa.w - keepH));
+      var y = clamp(g.y, wa.top, Math.max(wa.top, viewport().h - 34));
+      applyGeom(rec, { x: x, y: y, w: w, h: h });
+      rec.geom = { x: x, y: y, w: w, h: h };
+    });
+  }
+  function scheduleRelayout() {
     clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(function () {
-      // 先重算虚拟显示器的缩放与居中（手机上旋屏后 scale 会变），
-      // 再按新的可用区夹取窗口 —— 顺序反了会用旧坐标系算出错误位置。
-      applyDisplay();
-      var wa = workArea();
-      order.forEach(function (id) {
-        var rec = windows[id];
-        if (!rec) return;
-        if (rec.fullscreen) { applyGeom(rec, { x: 0, y: 0, w: viewport().w, h: viewport().h }); return; }
-        if (rec.maximized) { applyGeom(rec, { x: wa.left, y: wa.top, w: wa.w, h: wa.h }); return; }
-        var g = currentGeom(rec);
-        var w = Math.min(g.w, wa.w);
-        var h = Math.min(g.h, wa.h);
-        // 与拖动同一套约束：保证标题栏至少有 120px（或半宽）留在视口里
-        var keepH = Math.min(120, w * 0.5);
-        var x = clamp(g.x, -(w - keepH), Math.max(0, wa.w - keepH));
-        var y = clamp(g.y, wa.top, Math.max(wa.top, viewport().h - 34));
-        applyGeom(rec, { x: x, y: y, w: w, h: h });
-        rec.geom = { x: x, y: y, w: w, h: h };
-      });
-    }, safeMs(140, 140, 60, 800));
-  });
+    resizeTimer = setTimeout(relayout, safeMs(140, 140, 60, 800));
+  }
+  window.addEventListener('resize', scheduleRelayout);
+  // 软键盘弹起/收起、地址栏伸缩：visualViewport 比 window.resize 更可靠
+  var _vv = window.visualViewport;
+  if (_vv) {
+    _vv.addEventListener('resize', scheduleRelayout);
+    // 键盘顶起时可视区被推高 → offsetTop 变化，触发 scroll（不是 resize）
+    _vv.addEventListener('scroll', scheduleRelayout);
+  }
+  window.addEventListener('orientationchange', scheduleRelayout);
+
+  /* ═══════════════════════════════════════════════════════════════════
+   * 移动端 viewport：确保 host 页面有正确的 meta
+   * （viewport-fit=cover 才能让安全区 env() 生效；user-scalable=no 配合
+   *  touch-action:manipulation 消除移动端双击/捏合缩放与 300ms 点击延迟）
+   * ═══════════════════════════════════════════════════════════════════ */
+  function ensureViewportMeta() {
+    var head = document.head || document.getElementsByTagName('head')[0];
+    if (!head) return;
+    var want = 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover';
+    var meta = head.querySelector('meta[name="viewport"]');
+    if (!meta) {
+      meta = document.createElement('meta');
+      meta.name = 'viewport';
+      meta.content = want;
+      head.appendChild(meta);
+    } else {
+      var c = (meta.getAttribute('content') || '');
+      // 补齐关键项，不覆盖 host 已有的合理设置
+      if (!/viewport-fit\s*=\s*cover/.test(c)) c = (c ? c + ',' : '') + 'viewport-fit=cover';
+      if (!/user-scalable\s*=\s*no/.test(c)) c = c + ',user-scalable=no';
+      if (!/maximum-scale/.test(c)) c = c + ',maximum-scale=1';
+      meta.setAttribute('content', c);
+    }
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════
+   * Android 返回键 / 系统返回：关掉最上层浮层或窗口，而不是直接退出页面
+   * 用 history 哨兵拦截 popstate：有层可关就关、并重新占位；
+   * 没有层则放行，别把用户困在页面里。
+   * ═══════════════════════════════════════════════════════════════════ */
+  function installBackGuard() {
+    var SENTINEL = '__runx_backguard__';
+    function topModal() {
+      var modals = root.querySelectorAll('.rx-modal-back');
+      return modals.length ? modals[modals.length - 1] : null;
+    }
+    function closeTop() {
+      if (openMenu) { closeMenu(); return true; }          // 下拉 / 上下文菜单
+      if (startMenu) { closeStartMenu(); return true; }     // 开始菜单
+      var m = topModal();                                   // 设置 / 关于 / 确认
+      if (m) {
+        if (typeof m.__close === 'function') m.__close();
+        else m.remove();
+        return true;
+      }
+      if (order.length) { closeWindow(order[order.length - 1]); return true; }  // 最上层窗口
+      return false;
+    }
+    window.addEventListener('popstate', function () {
+      // 有层可关 → 拦截返回、关掉最上层；否则放行（让浏览器后退/退出）
+      if (closeTop()) history.pushState({ rx: SENTINEL }, '');
+    });
+    // 占一条历史，使第一次系统返回键落在哨兵上，而不是直接离开桌面
+    if (!history.state || (history.state && history.state.rx) !== SENTINEL) {
+      history.pushState({ rx: SENTINEL }, '');
+    }
+  }
 
   /* ═══════════════════════════════════════════════════════════════════
    * 时钟
@@ -2909,10 +3029,13 @@
     applyTheme();
     applyWallpaper();
     applyDisplay();          // 必须在渲染图标/窗口之前：它定下逻辑坐标系
+    applyViewportFrame();    // 把桌面钉到真实可视区（键盘/地址栏变化时）
     renderIcons();
     renderDock();
     renderMenus();
   }
+
+  ensureViewportMeta();
 
   Promise.all([api('/desktop'), api('/apps')]).then(function (res) {
     cfg = res[0] || {};
@@ -2934,6 +3057,8 @@
   /* 离开页面前把待写的窗口几何塞出去。
      只用 pagehide/visibilitychange：beforeunload 在移动端常常不触发，
      而且它一旦设了 returnValue 就会弹原生确认框，很打扰。 */
+  installBackGuard();
+
   window.addEventListener('pagehide', flushWindows);
   document.addEventListener('visibilitychange', function () {
     if (document.visibilityState === 'hidden') flushWindows();
