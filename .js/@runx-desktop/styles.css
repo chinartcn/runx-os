@@ -24,6 +24,20 @@
   background-position: center;
   /* 壁纸换色时不要闪白 */
   background-color: #0e0b1e;
+  /* ── 移动端卫生 ──
+   *  -webkit-tap-highlight-color:none 去掉 Android 点击灰块；
+   *  overscroll-behavior:none 抑制页面级橡皮筋下拉刷新；
+   *  touch-action:manipulation 消除 300ms 点击延迟并禁用页面捏合缩放
+   *    （与 viewport 的 user-scalable=no 一致，但不影响内部 overflow 滚动）；
+   *  刘海屏安全区变量：需 viewport-fit=cover 才生效，桌面端恒为 0。 */
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  overscroll-behavior: none;
+  touch-action: manipulation;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
 }
 
 /* 壁纸：内置极光渐变。用背景层叠出层次，不用图片（零请求）。 */
@@ -44,11 +58,11 @@
 #runx-desktop .rx-menubar {
   position: absolute;
   top: 0; left: 0; right: 0;
-  height: var(--navbar-h);
+  height: calc(var(--navbar-h) + var(--safe-top));   /* 含刘海安全区 */
   display: flex;                 /* ← 就是普通的 Flexbox，不是原生窗口 chrome */
   align-items: center;
   gap: 2px;
-  padding: 0 10px;
+  padding: var(--safe-top) 10px 0;   /* 顶部预留安全区，内容下沉避刘海 */
   box-sizing: border-box;
   /* 细分割线：1px hairline 比阴影更轻，符合「界面不喧宾夺主」 */
   border-bottom: 0.5px solid var(--hairline);
@@ -619,7 +633,7 @@
 #runx-desktop .rx-dock {
   position: absolute;
   left: 50%;
-  bottom: 8px;
+  bottom: calc(8px + var(--safe-bottom));   /* 避开 Home 指示条安全区 */
   transform: translateX(-50%);
   height: calc(var(--dock-h) - 12px);
   max-width: min(92vw, 900px);
@@ -723,7 +737,7 @@
  * ═══════════════════════════════════════════════════════════════════════ */
 #runx-desktop .rx-toast {
   position: absolute;
-  left: 50%; bottom: calc(var(--dock-h) + 22px);
+  left: 50%; bottom: calc(var(--dock-h) + 22px + var(--safe-bottom));
   transform: translateX(-50%) translateY(8px);
   padding: 7px 14px;
   border-radius: var(--radius-pill);
@@ -779,7 +793,7 @@
   #runx-desktop .rx-icon { width: 78px; }
   #runx-desktop .rx-icon img,
   #runx-desktop .rx-icon .rx-emoji { width: 44px; height: 44px; font-size: 34px; }
-  #runx-desktop .rx-dock { max-width: 96vw; bottom: 6px; }
+  #runx-desktop .rx-dock { max-width: 96vw; bottom: calc(6px + var(--safe-bottom)); }
   #runx-desktop .rx-dock-item .rx-dock-name { display: none; }
   #runx-desktop .rx-dock-item { padding: 0 9px; }
 
@@ -805,6 +819,25 @@
   #runx-desktop .rx-win-resize[data-dir="se"] { width: 22px; height: 22px; }
   #runx-desktop .rx-win-dots { gap: 9px; }
   #runx-desktop .rx-dot { width: 14px; height: 14px; }
+}
+
+/* 触屏（无 hover 能力）：点击态用 :active 给瞬时反馈；hover 背景在触屏会「粘住」 */
+@media (hover: none) {
+  #runx-desktop .rx-menu-root:hover,
+  #runx-desktop .rx-icon:hover,
+  #runx-desktop .rx-dock-item:hover,
+  #runx-desktop .rx-menu-item:hover,
+  #runx-desktop .rx-start-app:hover,
+  #runx-desktop .rx-start-btn:hover,
+  #runx-desktop .rx-chip:hover,
+  #runx-desktop .rx-swatch:hover,
+  #runx-desktop .rx-wall:hover { background: transparent; }
+  #runx-desktop .rx-menu-root:active,
+  #runx-desktop .rx-icon:active,
+  #runx-desktop .rx-dock-item:active,
+  #runx-desktop .rx-menu-item:active,
+  #runx-desktop .rx-start-app:active,
+  #runx-desktop .rx-start-btn:active { background: var(--surface-hover); }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -931,7 +964,7 @@
 #runx-desktop .rx-start {
   position: absolute;
   left: 8px;
-  top: calc(var(--navbar-h) + 6px);
+  top: calc(var(--navbar-h) + var(--safe-top) + 6px);   /* 含刘海安全区，避免压住导航条 */
   width: min(340px, 92vw);
   max-height: min(560px, calc(100% - var(--navbar-h) - var(--dock-h) - 24px));
   display: flex;
@@ -1079,7 +1112,7 @@
   #runx-desktop .rx-start {
     left: 6px; right: 6px;
     width: auto;
-    max-height: calc(100% - var(--navbar-h) - var(--dock-h) - 18px);
+    max-height: calc(100% - var(--navbar-h) - var(--safe-top) - var(--dock-h) - var(--safe-bottom) - 16px);
   }
 }
 
