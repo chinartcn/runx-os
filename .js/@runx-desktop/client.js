@@ -2846,11 +2846,13 @@
     var vw = physViewport().w, vh = physViewport().h;
     var r = m.getBoundingClientRect();
 
-    // 右下越界就翻到指针另一侧，始终保证整张菜单可见（手机屏幕小，很常见）
+    // 边距上沿要避开导航条：菜单压住菜单栏很难看，也挡住了系统级入口。
+    // 底沿留 6px 就够（下面就是桌面）。
+    var topMin = navbarH() + 4;
     var left = px_ + r.width > vw - 6 ? px_ - r.width : px_;
     var top = py_ + r.height > vh - 6 ? py_ - r.height : py_;
     m.style.left = px(clamp(left, 6, Math.max(6, vw - r.width - 6)));
-    m.style.top = px(clamp(top, 6, Math.max(6, vh - r.height - 6)));
+    m.style.top = px(clamp(top, topMin, Math.max(topMin, vh - r.height - 6)));
     m.style.visibility = '';
 
     openMenu = m;
