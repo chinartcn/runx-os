@@ -282,6 +282,8 @@
         break;
       case 'resized':
         if (state.sessions[msg.sessionId]) setLabel(msg.sessionId, 'shell ' + msg.cols + 'x' + msg.rows);
+        // 重建会话等事件提示显示在终端区域的浮层，而不是写进终端里
+        if (msg.note) hint(msg.note);
         break;
       case 'error':
         if (msg.message === 'session_not_found') {
