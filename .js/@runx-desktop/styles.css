@@ -946,9 +946,10 @@
   --padding: 8px;
   transform-origin: 0 0;
   /* 开始菜单是**最大**的一块弹出面板，底下可能压着深色终端 ——
-     只靠 .rx-material-thick 的毛玻璃会让文字透出来糊成一片。
-     这里单独把底色加到接近不透明：可读性优先于通透感。 */
-  background: color-mix(in srgb, var(--surface-card) 97%, var(--label-primary) 3%);
+     毛玻璃（--surface-card 是半透明的）会让下面的文字透出来糊成一片。
+     这里用**实心**底色：可读性优先于通透感。
+     不用 color-mix 混 --surface-card —— 半透明色混完还是半透明。 */
+  background: #ffffff;
 }
 #runx-desktop .rx-start[data-anim="in"] {
   animation: rx-start-in var(--dur-med) var(--ease-out);
@@ -989,7 +990,10 @@
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 4px 8px 8px;
-  flex: 1;
+  /* 用 flex-shrink 而不是 flex:1 —— 只有一两个应用时面板要贴着内容收缩，
+     撑到 max-height 会留一大片空白，看着像没加载出来。
+     应用多到超过 max-height 时才靠 overflow-y 滚动。 */
+  flex: 0 1 auto;
   min-height: 0;
   display: grid;
   gap: 2px;
@@ -1059,6 +1063,15 @@
   color: var(--label-tertiary);
   font: var(--font-caption);
   text-align: center;
+}
+
+/* 深色下换成深实色（同样为可读性，不跟着毛玻璃走）。
+   跟随系统时也要盖上 —— 否则用户把系统切深色，开始菜单还是白的。 */
+#runx-desktop[data-theme="dark"] .rx-start,
+#runx-desktop[data-theme="auto"] .rx-start { background: #1c1c20; }
+#runx-desktop[data-theme="light"] .rx-start { background: #ffffff; }
+@media (prefers-color-scheme: light) {
+  #runx-desktop[data-theme="auto"] .rx-start { background: #ffffff; }
 }
 
 /* 开始菜单在窄屏上铺得更开一点 */
