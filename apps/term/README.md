@@ -50,7 +50,7 @@ script -qfec 'stty rows <R> cols <C> 2>/dev/null; exec bash -i' /dev/null
 （设置 `COLUMNS`/`LINES` 环境变量只影响 readline 的显示宽度，不改变内核 tty winsize。）
 
 因此 resize 策略是：**杀掉旧 shell、按新尺寸重启一个，保留 sessionId 与前端 scrollback**。
-前端会收到一行灰色提示：`── 已按 NxM 重建会话（前台程序已重启）──`。
+前端在终端区域底部的浮层（不写入终端内容）提示：`已按 N×M 重建会话（前台程序已重启）`。
 
 > 代价：resize 会结束前台正在运行的程序（如 `vim`）。这换来的是零原生依赖能在 Termux 跑。
 > 若你愿意装原生模块，可把 `lib/pty.js` 换成 node-pty 并实现真正的 `resize()`。
@@ -142,8 +142,8 @@ curl -s -X POST http://127.0.0.1:4125/runx/desktop/icons \
 
 ## 已知局限
 
-1. **resize 会重建会话**：前台交互程序（`vim`/`top`/`ssh`）会被结束，并打印一行提示。
-   原因见上文 §2，是零原生依赖方案的固有取舍。
+1. **resize 会重建会话**：前台交互程序（`vim`/`top`/`ssh`）会被结束；提示显示在
+   终端区域浮层（不写入终端内容）。原因见上文 §2，是零原生依赖方案的固有取舍。
 2. **不随桌面自动停靠**：`appex.json` 里 `autostart:false`；窗口关闭后后端仍在跑，
    会话保留 30 分钟（无连接空闲）后回收。
 3. **进程重启后 sessionId 失效**：后端重启后旧会话不存在，前端重连时 `resume` 只能恢复
