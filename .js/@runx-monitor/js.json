@@ -1,0 +1,30 @@
+{
+  "scripts": "client.js",
+  "styles": "styles.css",
+  "config": {
+    "refresh_ms": {
+      "type": "number",
+      "label": "自动刷新间隔（毫秒）",
+      "description": "监视器面板轮询快照的间隔。设为 0 关闭自动刷新（仍可手动刷新）。",
+      "default": 3000,
+      "min": 0,
+      "max": 60000,
+      "step": 500
+    },
+    "history_lines": {
+      "type": "number",
+      "label": "日志窗口行数",
+      "description": "查看应用日志时默认拉取的尾部行数。",
+      "default": 200,
+      "min": 20,
+      "max": 5000,
+      "step": 10
+    },
+    "stream_enabled": {
+      "type": "boolean",
+      "label": "启用实时事件流",
+      "description": "通过 WebSocket 把内核事件实时推送到监视器面板。关闭后只保留轮询。",
+      "default": true
+    }
+  }
+}

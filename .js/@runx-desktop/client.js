@@ -849,6 +849,9 @@
     return order.map(function (id) {
       var rec = windows[id];
       if (!rec) return null;
+      // 内核扩展开的面板窗口不进快照：它们没有对应的应用记录，恢复时也
+      // 无从重建（由扩展自己在需要时打开），存进去只会在启动时留下一堆幽灵条目。
+      if (!rec.app) return null;
       var g = rec.geom || currentGeom(rec);
       // 最大化/全屏时 offsetWidth 是铺满后的尺寸，要记住的是「还原后」的几何 ——
       // rec.restored 正是为此存的。
@@ -1316,6 +1319,130 @@
     return id;
   }
 
+  function openPanel(id, titleText, subtitleText, mountFn, opts) {
+    opts = opts || {};
+    var key = winId(id);
+    var rec0 = windows[key];
+    if (rec0) {
+      if (rec0.hidden || rec0.minimized) showWindow(key);
+      else focusWindow(key);
+      // 已开着：让扩展有机会刷新（例如设置面板重开时重新拉数据）
+      if (rec0.mountFn) { try { rec0.mountFn(rec0.bodyNode); } catch (e) {} }
+      return key;
+    }
+
+    var g = opts.geom || defaultGeom(order.length);
+    var initialStyle = narrow() ? 'unifiedCompact' : 'unified';
+    var w = el('div', 'rx-window rx-material-regular' +
+      (initialStyle !== 'unified' ? ' ' + initialStyle : ''));
+    w.style.left = px(g.x);
+    w.style.top = px(g.y);
+    w.style.width = px(g.w);
+    w.style.height = px(g.h);
+    w.dataset.winId = key;
+    w.setAttribute('role', 'dialog');
+    w.setAttribute('aria-label', titleText);
+
+    var toolbar = el('div', 'rx-win-toolbar');
+
+    var dots = el('div', 'rx-win-dots');
+    var bClose = el('button', 'rx-dot close');
+    bClose.setAttribute('title', '关闭');
+    bClose.setAttribute('aria-label', '关闭窗口');
+    var bMin = el('button', 'rx-dot min');
+    bMin.setAttribute('title', '最小化');
+    bMin.setAttribute('aria-label', '最小化窗口');
+    var bMax = el('button', 'rx-dot max');
+    bMax.setAttribute('title', '最大化（双击进入全屏）');
+    bMax.setAttribute('aria-label', '最大化窗口');
+    dots.appendChild(bClose); dots.appendChild(bMin); dots.appendChild(bMax);
+
+    var titleZone = el('div', 'rx-win-title-zone');
+    titleZone.appendChild(el('div', 'rx-win-title', titleText));
+    titleZone.appendChild(el('div', 'rx-win-subtitle', subtitleText || 'RunX 内核扩展'));
+
+    var tools = el('div', 'rx-win-tools');
+    var styleGroup = el('div', 'rx-segmented rx-no-drag');
+    styleGroup.setAttribute('role', 'tablist');
+    styleGroup.setAttribute('aria-label', '工具栏样式');
+    [['unified', '统一'], ['unifiedCompact', '紧凑'], ['expanded', '展开']].forEach(function (pair) {
+      var b = el('button', null, pair[1]);
+      b.setAttribute('role', 'tab');
+      b.setAttribute('aria-selected', pair[0] === initialStyle ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        setToolbarStyle(key, pair[0]);
+        var kids = styleGroup.children;
+        for (var i = 0; i < kids.length; i++) kids[i].setAttribute('aria-selected', 'false');
+        b.setAttribute('aria-selected', 'true');
+      });
+      styleGroup.appendChild(b);
+    });
+    tools.appendChild(styleGroup);
+    tools.appendChild(el('div', 'rx-tool-sep'));
+    tools.appendChild(toolBtn(ICON.expand, '全屏 (⌘⌃F)', function () { toggleFullscreen(key); }));
+
+    toolbar.appendChild(dots);
+    toolbar.appendChild(titleZone);
+    toolbar.appendChild(tools);
+
+    /* — 内容区：由 mountFn 填充（不是 iframe）— */
+    var body = el('div', 'rx-win-body rx-win-panel');
+    var mount = el('div', 'rx-panel-host');
+    body.appendChild(mount);
+
+    w.appendChild(toolbar);
+    w.appendChild(body);
+
+    ['n', 's', 'w', 'e', 'nw', 'ne', 'sw', 'se'].forEach(function (dir) {
+      w.appendChild(el('div', 'rx-win-resize ' + dir));
+    });
+
+    var rec = {
+      id: key, app: null, el: w, iframe: null,
+      title: titleZone.firstChild, subtitle: titleZone.lastChild,
+      geom: { x: g.x, y: g.y, w: g.w, h: g.h },
+      restored: null,
+      minimized: false, hidden: false,
+      fullscreen: false, maximized: false,
+      toolbarStyle: initialStyle,
+      bodyNode: mount, mountFn: mountFn,
+      openTs: Date.now(),
+      panel: true,                       // 标记：非应用窗口，几何持久化时跳过 app 相关字段
+    };
+    windows[key] = rec;
+    order.push(key);
+
+    bClose.addEventListener('click', function (e) { e.stopPropagation(); closeWindow(key, true); });
+    bMin.addEventListener('click', function (e) { e.stopPropagation(); minimizeWindow(key); });
+    bMax.addEventListener('click', function (e) { e.stopPropagation(); toggleMaximize(key); });
+    bMax.addEventListener('dblclick', function (e) { e.stopPropagation(); toggleFullscreen(key); });
+
+    toolbar.addEventListener('mousedown', function (e) {
+      if (e.target.closest && e.target.closest('button, input, .rx-no-drag, .rx-segmented')) return;
+      startDrag(e, key);
+    });
+    toolbar.addEventListener('touchstart', function (e) {
+      if (e.target.closest && e.target.closest('button, input, .rx-no-drag, .rx-segmented')) return;
+      startDrag(e, key);
+    }, { passive: false });
+    toolbar.addEventListener('dblclick', function (e) {
+      if (e.target.closest && e.target.closest('button, input, .rx-no-drag, .rx-segmented')) return;
+      toggleMaximize(key);
+    });
+    w.addEventListener('mousedown', function () { focusWindow(key); }, true);
+    w.addEventListener('touchstart', function () { focusWindow(key); }, { passive: true, capture: true });
+
+    vscreen.appendChild(w);
+    if (typeof applyAccent === 'function') applyAccent();
+
+    try { mountFn(mount); }
+    catch (e) { mount.appendChild(el('div', 'rx-panel-error', '面板加载失败：' + e.message)); }
+
+    focusWindow(key);
+    if (!opts.silent) { announce(titleText + ' 已打开'); renderDock(); saveWindows(); }
+    return key;
+  }
+
   function toolBtn(path, label, onClick) {
     var b = el('button', 'rx-tool');
     b.appendChild(svgIcon(path));
@@ -1421,7 +1548,11 @@
     if (activeId) focusWindow(activeId);
     renderDock(); renderMenus();
     saveWindows();            // 关掉的窗口不该在刷新后复活
-    if (notify !== false) announce(appTitle(rec.app) + ' 已关闭');
+    if (notify !== false) {
+      // 面板窗口没有应用记录，标题从 rec.title 取
+      var nm = rec.app ? appTitle(rec.app) : ((rec.title && rec.title.textContent) || '面板');
+      announce(nm + ' 已关闭');
+    }
   }
 
   function toggleMaximize(id) {
@@ -1650,6 +1781,20 @@
     ids.forEach(function (id) {
       var rec = windows[id];
       if (!rec) return;
+      // 内核扩展面板：Dock 里用通用图标占位（没有应用记录可取图标）
+      if (!rec.app) {
+        var pActive = id === activeId && !rec.minimized && !rec.hidden;
+        var pb = el('button', 'rx-dock-item' + (pActive ? ' active' : '') +
+          (rec.minimized || rec.hidden ? ' minimized' : ''));
+        var pTitle = (rec.title && rec.title.textContent) || '面板';
+        pb.setAttribute('title', pTitle + (rec.minimized ? '（已最小化）' : ''));
+        pb.appendChild(iconSpan('settings', 'rx-dock-ico', 16));
+        pb.addEventListener('click', function () {
+          if (rec.minimized || rec.hidden) showWindow(id); else focusWindow(id);
+        });
+        dock.appendChild(pb);
+        return;
+      }
       var active = id === activeId && !rec.minimized && !rec.hidden;
       var b = el('button', 'rx-dock-item' + (active ? ' active' : '') +
         (rec.minimized || rec.hidden ? ' minimized' : ''));
@@ -1728,6 +1873,14 @@
       { label: '关于 RunX OS', glyph: 'info', act: showAbout },
       { sep: true },
       { label: '应用管理…', glyph: 'grid', key: '⌘⇧A', act: openAppManager },
+      { label: '文件管理器', glyph: 'package', act: function () {
+          closeStartMenu();
+          if (window.RunX && RunX.files) RunX.files.open();
+        } },
+      { label: '状态监视器', glyph: 'info', act: function () {
+          closeStartMenu();
+          if (window.RunX && RunX.monitor) RunX.monitor.open();
+        } },
       { label: '桌面设置…', glyph: 'settings', key: '⌘,', act: openSettings },
       { sep: true },
       { label: '隐藏 ' + name, key: '⌘H', disabled: disabled, act: function () { hideWindow(activeId); } },
@@ -2034,11 +2187,19 @@
   function windowMenuItems(id) {
     var rec = windows[id];
     if (!rec) return [];
-    return [
-      { label: '重新加载', key: '⌘R', act: function () {
+    // 面板窗口没有 iframe，也就没有「重新加载」这一项
+    var items = [];
+    if (rec.app) {
+      items.push({ label: '重新加载', key: '⌘R', act: function () {
           rec.veilHint.textContent = '正在加载…'; rec.veil.classList.remove('hidden');
           rec.iframe.src = appOrigin(rec.app);
-        } },
+        } });
+    } else {
+      items.push({ label: '刷新面板', act: function () {
+        if (rec.mountFn && rec.bodyNode) { try { rec.mountFn(rec.bodyNode); } catch (e) { /* 忽略 */ } }
+      } });
+    }
+    return items.concat([
       { label: rec.maximized ? '退出最大化' : '最大化', act: function () { toggleMaximize(id); } },
       { label: rec.fullscreen ? '退出全屏' : '进入全屏', act: function () { toggleFullscreen(id); } },
       { sep: true },
@@ -2046,7 +2207,7 @@
       { label: '隐藏', act: function () { hideWindow(id); } },
       { sep: true },
       { label: '关闭窗口', key: '⌘W', destructive: true, act: function () { closeWindow(id); } },
-    ];
+    ]);
   }
 
   /* ═══════════════════════════════════════════════════════════════════
@@ -2055,6 +2216,7 @@
   function postToApp(cmd) {
     var rec = activeId ? windows[activeId] : null;
     if (!rec) return;
+    if (!rec.iframe) { showToast('当前窗口不支持该命令'); return; }
     try {
       // 尝试直接聚焦 iframe 并触发编辑命令（同源应用有效）
       rec.iframe.contentWindow.focus();
@@ -2377,6 +2539,19 @@
   }
 
   function openSettings() {
+    var s = window.RunX && window.RunX.settings;
+    if (s && typeof s.open === 'function') {
+      openPanel('settings', '设置', '@runx-settings', function (host) {
+        host.classList.add('rx-panel-pad');
+        s.open(host);
+      });
+      return;
+    }
+    openSettingsLegacy();
+  }
+
+  /** 旧版内联设置面板（settings 扩展不可用时的回落） */
+  function openSettingsLegacy() {
     var body = el('div');
     body.style.cssText = 'display:grid;gap:18px';
 
@@ -3288,6 +3463,9 @@
     get apps() { return apps; },
     get cfg() { return cfg; },
     open: openApp,
+    // 内核扩展开的面板：RunX.desktop.openPanel('files', '文件管理器', '@runx-files', fn)
+    openPanel: openPanel,
+    openSettings: openSettings,
     close: function (nameOrId) { return closeWindow(resolveWinId(nameOrId)); },
     focus: function (nameOrId) {
       var id = resolveWinId(nameOrId);
@@ -3313,3 +3491,6 @@
     applyDisplay: applyDisplay,
   };
 })();
+
+var RunX = (window.RunX = window.RunX || {});
+RunX.desktop = window.__runx;

@@ -1,0 +1,236 @@
+/* @runx-settings 样式 —— 分栏设置面板 */
+
+.rxset {
+  --rxset-bg: var(--rx-surface, #ffffff);
+  --rxset-fg: var(--rx-text, #1a1a1a);
+  --rxset-dim: var(--rx-text-dim, #6b6b6b);
+  --rxset-line: var(--rx-border, rgba(0, 0, 0, .12));
+  --rxset-fill: var(--rx-fill, rgba(0, 0, 0, .05));
+  --rxset-accent: var(--rx-accent, #0a6cff);
+  --rxset-bad: var(--rx-red, #dc2626);
+
+  display: grid;
+  grid-template-columns: 132px minmax(0, 1fr);
+  height: 100%;
+  min-height: 340px;
+  box-sizing: border-box;
+  font: 13px/1.55 var(--rx-font, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif);
+  color: var(--rxset-fg);
+  background: var(--rxset-bg);
+  position: relative;
+  overflow: hidden;
+}
+@media (max-width: 560px) {
+  .rxset { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr); }
+  .rxset-nav { flex-direction: row !important; overflow-x: auto; border-right: none !important; border-bottom: 1px solid var(--rxset-line); }
+}
+
+/* ── 左侧导航 ── */
+.rxset-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 8px;
+  border-right: 1px solid var(--rxset-line);
+  overflow: auto;
+}
+.rxset-tab {
+  font: inherit;
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: inherit;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.rxset-tab:hover { background: var(--rxset-fill); }
+.rxset-tab.on { background: var(--rxset-fill); color: var(--rxset-accent); font-weight: 600; }
+
+/* ── 右侧内容 ── */
+.rxset-pane { padding: 14px 16px; overflow: auto; min-height: 0; }
+
+.rxset-card {
+  border: 1px solid var(--rxset-line);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+}
+.rxset-h {
+  margin: 0 0 10px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .04em;
+  color: var(--rxset-dim);
+  text-transform: uppercase;
+}
+
+.rxset-field { margin-bottom: 12px; }
+.rxset-field:last-child { margin-bottom: 0; }
+.rxset-label { display: block; font-size: 12px; margin-bottom: 5px; }
+.rxset-hint { font-size: 11.5px; color: var(--rxset-dim); margin-top: 5px; }
+
+.rxset-input {
+  font: inherit;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--rxset-line);
+  background: var(--rxset-bg);
+  color: inherit;
+  min-width: 160px;
+}
+.rxset-check { width: 16px; height: 16px; accent-color: var(--rxset-accent); }
+
+.rxset-btn {
+  font: inherit;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--rxset-line);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.rxset-btn:hover { background: var(--rxset-fill); }
+.rxset-btn-sm { padding: 2px 8px; font-size: 12px; }
+
+/* ── KV 表 ── */
+.rxset-kv { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.rxset-kv th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--rxset-dim);
+  padding: 3px 10px 3px 0;
+  white-space: nowrap;
+  vertical-align: top;
+  width: 108px;
+}
+.rxset-kv td { padding: 3px 0; word-break: break-all; }
+
+/* ── 扩展表 ── */
+.rxset-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.rxset-table th {
+  text-align: left;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--rxset-dim);
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--rxset-line);
+}
+.rxset-table td { padding: 6px; border-bottom: 1px solid var(--rxset-line); vertical-align: middle; }
+.rxset-extname { font-weight: 500; }
+.rxset-extid { font-size: 11px; color: var(--rxset-dim); font-family: var(--rx-mono, monospace); }
+.rxset-num { font-variant-numeric: tabular-nums; color: var(--rxset-dim); }
+
+.rxset-switch {
+  font: inherit;
+  font-size: 11.5px;
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  background: transparent;
+  color: var(--rxset-dim);
+  cursor: pointer;
+}
+.rxset-switch.on { color: var(--rx-green, #16a34a); }
+.rxset-switch:disabled { opacity: .5; cursor: wait; }
+/* 状态列：开关 + 「内置」标记并排 */
+.rxset-swrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+/* id 以 @ 开头 = 内置扩展。内核的 validateExtId 已支持 @ 前缀，
+   所以它和普通扩展一样可启停，这个标签只作身份提示。 */
+.rxset-fixed {
+  display: inline-block;
+  font-size: 11.5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px dashed var(--rxset-line);
+  color: var(--rxset-dim);
+  white-space: nowrap;
+}
+
+/* ── 强调色 / 壁纸 ── */
+.rxset-swatches { display: flex; gap: 8px; flex-wrap: wrap; }
+.rxset-swatch {
+  width: 30px; height: 30px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  padding: 0;
+  cursor: pointer;
+  background: transparent;
+  position: relative;
+}
+.rxset-swatch > span { display: block; width: 100%; height: 100%; border-radius: 50%; }
+.rxset-swatch.on { border-color: var(--rxset-accent); }
+.rxset-swatch.on::after {
+  content: '✓';
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  color: #fff; font-size: 13px;
+  text-shadow: 0 0 2px rgba(0, 0, 0, .5);
+}
+/* 预设色的实际色值（与 desktop 服务端 ACCENTS 对齐） */
+.rxset-sw-blue { background: #0a6cff; }
+.rxset-sw-purple { background: #7c3aed; }
+.rxset-sw-pink { background: #db2777; }
+.rxset-sw-red { background: #d70015; }
+.rxset-sw-orange { background: #c2410c; }
+.rxset-sw-yellow { background: #a16207; }
+.rxset-sw-green { background: #15803d; }
+.rxset-sw-graphite { background: #4b5563; }
+
+.rxset-walls { display: flex; gap: 6px; flex-wrap: wrap; }
+.rxset-wall {
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--rxset-line);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.rxset-wall:hover { background: var(--rxset-fill); }
+.rxset-wall.on { border-color: var(--rxset-accent); color: var(--rxset-accent); }
+
+.rxset-empty { padding: 18px 4px; color: var(--rxset-dim); font-size: 12px; }
+.rxset-empty.is-bad { color: var(--rxset-bad); }
+
+/* ── 配置编辑弹层 ── */
+.rxset-modal {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, .34);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  z-index: 5;
+}
+.rxset-modal-inner {
+  background: var(--rxset-bg);
+  border: 1px solid var(--rxset-line);
+  border-radius: 12px;
+  padding: 14px 16px;
+  width: min(560px, 100%);
+  max-height: 84%;
+  overflow: auto;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, .28);
+}
+.rxset-editor {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: var(--rx-mono, ui-monospace, "SF Mono", Menlo, Consolas, monospace);
+  font-size: 12.5px;
+  line-height: 1.6;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid var(--rxset-line);
+  background: transparent;
+  color: inherit;
+  resize: vertical;
+}
+.rxset-modalfoot { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }

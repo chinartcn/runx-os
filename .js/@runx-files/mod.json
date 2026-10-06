@@ -1,0 +1,10 @@
+{
+  "name": "文件管理器（RunX 内核）",
+  "description": "浏览、预览与（可选）编辑站点文件，默认只读。",
+  "version": "1.0.0",
+  "author": "chinartcn",
+  "enabled": true,
+  "core": true,
+  "order": 60,
+  "requires": ["@runx-desktop"]
+}

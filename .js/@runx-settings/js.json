@@ -1,0 +1,49 @@
+{
+  "scripts": "client.js",
+  "styles": "styles.css",
+  "config": {
+    "default_section": {
+      "type": "select",
+      "label": "默认分栏",
+      "description": "打开设置面板时默认显示的分栏。",
+      "default": "general",
+      "options": [
+        {
+          "value": "general",
+          "label": "通用"
+        },
+        {
+          "value": "appearance",
+          "label": "外观"
+        },
+        {
+          "value": "display",
+          "label": "显示"
+        },
+        {
+          "value": "extensions",
+          "label": "扩展"
+        },
+        {
+          "value": "about",
+          "label": "关于"
+        }
+      ]
+    },
+    "proxy_timeout_ms": {
+      "type": "number",
+      "label": "上游请求超时（毫秒）",
+      "description": "代理桌面扩展与内核接口时的超时。避免某一方卡住把设置面板整个挂死。",
+      "default": 8000,
+      "min": 500,
+      "max": 60000,
+      "step": 500
+    },
+    "show_core_extensions": {
+      "type": "boolean",
+      "label": "在扩展列表中显示内核扩展",
+      "description": "关闭后，扩展管理里只列普通扩展（@runx-* 内核扩展隐藏），避免误停用把站点弄坏。",
+      "default": true
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "状态监视器（RunX 内核）",
+  "description": "实时汇总内核与应用运行状态：进程表、端口、事件流、垃圾回收统计。",
+  "version": "1.0.0",
+  "author": "chinartcn",
+  "enabled": true,
+  "core": true,
+  "order": 50,
+  "requires": [
+    "@runx-supervisor",
+    "@runx-event-bus"
+  ]
+}

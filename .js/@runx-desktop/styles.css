@@ -1288,3 +1288,40 @@
  * 缩到手机上会小到看不清，而系统级弹层应该保持设备原生字号。
  * ═══════════════════════════════════════════════════════════════════════ */
 #runx-desktop .rx-menu-ctx { z-index: 560; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * 内核扩场面板窗口（@runx-settings / @runx-files / @runx-monitor）
+ *
+ * 这些窗口的内容不是 iframe，而是扩展的 client.js 直接挂上来的 DOM。
+ * 面板自己负责内部的滚动与布局，所以这里只把 host 撑满，不设 padding ——
+ * 面板各区域（工具栏/分栏）需要贴边，留白交给面板自己控制（rx-panel-pad）。
+ * ═══════════════════════════════════════════════════════════════════════ */
+#runx-desktop .rx-win-body.rx-win-panel {
+  display: block;
+  padding: 0;
+  background: var(--surface, #fff);
+  overflow: hidden;
+}
+#runx-desktop .rx-panel-host {
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+/* 需要留白的面板（设置面板三栏，不要贴边） */
+#runx-desktop .rx-panel-host.rx-panel-pad { padding: 0; }
+#runx-desktop .rx-panel-error {
+  padding: 20px;
+  color: var(--red, #dc2626);
+  font-size: 13px;
+}
+
+/* 独立模式（desktop 不可用时的回落）：铺满视口，可控关闭 */
+.rxmon-standalone,
+.rxfile-standalone,
+.rxset-standalone {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: var(--surface, #fff);
+}

@@ -1,0 +1,24 @@
+{
+  "scripts": "client.js",
+  "styles": "styles.css",
+  "config": {
+    "allow_write": {
+      "type": "boolean",
+      "label": "允许写入",
+      "description": "开启后可新建、编辑、重命名、删除文件。内核文件（server.js、os.js、.js/、.git/ 等）与 node_modules 始终不可写。站点若暴露公网，请保持关闭。",
+      "default": false
+    },
+    "write_root": {
+      "type": "string",
+      "label": "限定写入目录",
+      "description": "可选。填写相对站点根的路径（如内容目录），写入操作只允许发生在其内部；留空表示除内核保护名单外均可写。",
+      "default": ""
+    },
+    "show_hidden": {
+      "type": "boolean",
+      "label": "默认显示隐藏项",
+      "description": "是否默认显示以点开头的文件与目录（如 .gitignore）。",
+      "default": false
+    }
+  }
+}
