@@ -261,6 +261,37 @@ ETag 304 协商。内联的 CSS 在导出前会把相对 `url()` 改写成绝对
 注意 CSS 里的相对地址是按 **CSS 文件自身所在目录** 解析的（`assets/tokens.css` 里写
 `fonts/x.woff2` 实际指向 `assets/fonts/x.woff2`），所以重写时要带上基准目录。
 
+### 移动端适配
+
+桌面外壳把「手机能用」当作一等目标（Termux + 手机浏览器是主要场景之一），除了既有的
+窄屏布局（≤680px）、触屏热区放大、四处**长按菜单**（长按 = 桌面右键）之外，还包括：
+
+- **viewport 修正**：客户端启动时确保页面有正确的 `<meta name="viewport">` ——
+  `width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover`。
+  `viewport-fit=cover` 是刘海屏安全区 `env(safe-area-inset-*)` 生效的前提；host 页面已有
+  meta 时只**补齐**缺失项，不整体覆盖。
+- **真实可视区（visualViewport）**：手机上地址栏收起、软键盘弹起时，布局视口
+  （`innerWidth/Height`）往往纹丝不动、`window.resize` 不触发，但可见区域确实变了。
+  `physViewport()` 优先读 `visualViewport`，并把 `#runx-desktop` 钉在可视区矩形内
+  （`offsetTop/offsetLeft/width/height`），窗口和 Dock 不会被键盘盖住；
+  `visualViewport` 的 `resize`/`scroll` 与 `orientationchange` 都会触发与 `resize`
+  同一套防抖重算（先重算缩放、再夹取窗口，顺序不能反）。
+- **手机分辨率回退**：视口窄于 680 且配置的是**桌面尺寸**预设（宽 > 680，如 1280×800）时，
+  显示时本地回退为「自适应」—— 否则 1280×800 的桌面在 390px 宽的手机上会被等比缩到
+  30%，导航条小到没法点。**配置本身不动**（回到桌面端仍按原设置渲染），想看「手机分辨率
+  桌面」可显式选 414×896 这类窄预设，不会被回退。
+- **安全区（刘海屏）**：导航条顶部预留 `safe-area-inset-top`、Dock 与 Toast 底部预留
+  `safe-area-inset-bottom`（整体上移而不是内部留白），开始菜单的定位与最大高度也把
+  上下安全区算进去。`navbarH()` 改为**量导航条的真实渲染高度**而不是读 CSS 变量，
+  安全区、窄屏高度变化自动跟随，`workArea` 不需要手动加偏移。
+- **触屏交互卫生**：`-webkit-tap-highlight-color: transparent` 去掉 Android 点击灰块、
+  `touch-action: manipulation` 消除 300ms 点击延迟并禁用页面捏合缩放、
+  `overscroll-behavior: none` 抑制页面级橡皮筋下拉；`(hover: none)` 下把 hover 背景降级为
+  `:active` 瞬时反馈，避免触屏「粘」在 hover 态。
+- **返回键拦截**：Android 系统返回键不再直接退出页面 —— 用一条 `history` 哨兵拦截
+  `popstate`，按「下拉/上下文菜单 → 开始菜单 → 设置/关于/确认弹窗 → 最上层窗口」的
+  顺序关掉最上层浮层并重新占位；**没有层可关时放行**，不把用户困在页面里。
+
 ---
 
 ## 已知局限
