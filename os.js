@@ -76,10 +76,56 @@ function init(App) {
    * 静默降级成 1ms —— 在手机上就是一个空转的 1ms 定时器（白耗电）。时长常来自
    * config.json / appex.json，可能是字符串、undefined、越界值或 Infinity。
    * 这里统一夹到 [min, max]，非法值回落到 dflt。
+   *
+   * 接受的形式（握手册里写的 `"30s"` 这类人类可读时长要能直接用）：
+   *   1500        数字，毫秒
+   *   "1500"      纯数字字符串，毫秒
+   *   "500ms"     毫秒
+   *   "2s" / "2sec" / "2secs" / "2 second(s)"   秒
+   *   "1.5s"      小数秒
+   *   "2m" / "2min" / "2minute(s)"              分
+   *   "1h" / "1hr" / "1hour(s)"                 时
+   *   "1d" / "1day(s)"                          天
+   *
+   * 其余一律回落到 dflt（包括 "abc"、""、null、NaN、Infinity、对象）。
+   * 注意 min/max 仍按毫秒夹取，单位换算在夹取之前完成。
    */
+  const MS_UNITS = {
+    ms: 1, msec: 1, msecs: 1, millisecond: 1, milliseconds: 1,
+    s: 1000, sec: 1000, secs: 1000, second: 1000, seconds: 1000,
+    m: 60000, min: 60000, mins: 60000, minute: 60000, minutes: 60000,
+    h: 3600000, hr: 3600000, hrs: 3600000, hour: 3600000, hours: 3600000,
+    d: 86400000, day: 86400000, days: 86400000,
+  };
+
+  function parseMs(v) {
+    // 数字直接当毫秒；非字符串非数字一律失败
+    if (typeof v === 'number') return Number.isFinite(v) ? v : NaN;
+    if (typeof v !== 'string') return NaN;
+    const s = v.trim().toLowerCase();
+    if (!s) return NaN;
+
+    // 纯数字字符串 → 毫秒
+    if (/^[+-]?(?:\d+\.?\d*|\.\d+)$/.test(s)) {
+      const n = Number(s);
+      return Number.isFinite(n) ? n : NaN;
+    }
+
+    // 数字 + 单位；允许中间有空格（"2 s"）与复数/缩写
+    const m = /^([+-]?(?:\d+\.?\d*|\.\d+))\s*([a-z]+)$/.exec(s);
+    if (!m) return NaN;
+    const num = Number(m[1]);
+    const unit = MS_UNITS[m[2]];
+    if (!unit || !Number.isFinite(num)) return NaN;
+    const ms = num * unit;
+    return Number.isFinite(ms) ? ms : NaN;
+  }
+
   function safeMs(v, dflt, min, max) {
-    let n = typeof v === 'string' ? Number(v) : v;
-    if (typeof n !== 'number' || !Number.isFinite(n)) n = dflt;
+    let n = parseMs(v);
+    if (!Number.isFinite(n)) n = dflt;
+    // dflt 自身也可能是坏值，兜一层，保证返回值**永远**是有限数
+    if (!Number.isFinite(n)) n = Number.isFinite(min) ? min : 0;
     if (n < min) n = min;
     if (n > max) n = max;
     return n;
@@ -554,6 +600,7 @@ function init(App) {
       // B 组
       exec, watch, poll, schedule, listen, secret, files, gc,
       safeMs,   // 定时器时长归一化（防 setTimeout(NaN) → 1ms 空转）
+      parseMs,  // 时长解析：支持 "2s" / "500ms" / "1.5m" 等单位字符串
       ipc: {
         on: (e, h) => ipc.on(e, h),
         off: (e, h) => ipc.off(e, h),
@@ -565,7 +612,7 @@ function init(App) {
   return {
     onUpgrade, forExt, wsRegister, broadcast,
     spawn, terminate, writeState, readState,
-    exec, watch, poll, schedule, listen, secret, files, gc, ipc, safeMs,
+    exec, watch, poll, schedule, listen, secret, files, gc, ipc, safeMs, parseMs,
   };
 }
 
