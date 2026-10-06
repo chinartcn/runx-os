@@ -441,7 +441,8 @@ value 写法：
   "version": "1.0.0",
   "author": "Your Name",
   "enabled": true,
-  "order": 100
+  "order": 100,
+  "cssOrder": 100
 }
 ```
 
@@ -450,8 +451,28 @@ name 显示名称，默认用目录名
 description 扩展说明
 version / author 版本与作者
 enabled false 时跳过此扩展
-order 数字越小越先加载，默认 100
+order **加载顺序**，数字越小越先加载，默认 100
+cssOrder **CSS 覆盖顺序**，数字越小越先注入（越大越后注入、越晚胜出），默认回退到 order（v2.8.2）
 requires 依赖的扩展 ID 列表，缺依赖时跳过该扩展（v2.3）
+
+> **`order` 与 `cssOrder` 是两件独立的事（v2.8.2 起）**
+>
+> - `order` 只决定**扩展脚本/钩子的加载顺序**（以及 `requires` 拓扑排序后的相对位置）；
+> - `cssOrder` 只决定**谁的 `styles` 在页面里后注入**，也就是**CSS 覆盖优先级**——后注入的赢；
+> - 两者互不影响。想让某个扩展「加载得早、但样式优先级最高」，就把它 `order` 设小、`cssOrder` 设大；
+> - 不写 `cssOrder` 时回退到 `order`，与 v2.8.1 及更早版本行为完全一致。
+>
+> 在 v2.8.2 之前，CSS 覆盖顺序只能靠 `order` 间接控制，而 `order` 又受 `requires` 拓扑排序影响，导致「想调样式优先级就得连加载顺序一起改」的耦合。现在解开了。
+>
+> ```json
+> // A：加载晚，但样式最先被覆盖（优先级最低）
+> { "order": 500, "cssOrder": 1 }
+>
+> // B：加载早，但样式最后注入（优先级最高）
+> { "order": 10, "cssOrder": 999 }
+> ```
+>
+> 上例加载顺序是 `B, A`，CSS 注入顺序是 `A, B`，最终 B 的样式生效。
 
 ### js.json — 注入配置 + 配置 schema
 
@@ -482,6 +503,18 @@ footer </body> 前原样注入
 "inline: .card{}" 强制作为内联内容
 
 含 <>{}、换行、或者 @/# 开头的长字符串会被直接当作内联内容。
+
+> **`.css` / `./x.css` 这类写法会被当成内联内容**（因为以 `.` 开头，或长度虽短但被判定为「不像文件路径」）。
+> 想稳定引用扩展目录里的文件，请一律用 `"@file:client.css"` 这种显式前缀。
+
+**注入顺序（v2.8.2）**
+
+| 注入字段 | 排序依据 |
+|---|---|
+| `styles` | 按各扩展的 **`cssOrder`** 升序（回退到 `order`），与加载顺序无关 |
+| `scripts` / `head` / `header` / `footer` | 按扩展**加载顺序**（`order` + `requires` 拓扑排序） |
+
+也就是说，**只有 `styles` 受 `cssOrder` 控制**——这正是 CSS 覆盖语义需要的东西；其余注入保持「谁先加载谁先注入」的可预期行为。详见 [mod.json — 元数据](#modjson--元数据)。
 
 ### index.js — 服务端钩子
 
@@ -751,13 +784,41 @@ module.exports = {
 方法 说明
 path(rel) 解析相对路径为绝对路径
 exists(rel) 存在性
-read(rel, encoding) 读文件（默认 utf8）
+read(rel, opts?) 读文件。`opts` 可为编码字符串（`'utf8'` / `'buffer'`），或 `{ encoding, maxBytes }`；默认 utf8
 write(rel, content, encoding) 写文件（自动创建父目录）
 delete(rel) 递归删除
-list(rel) 列目录，返回 [{ name, type }]
+list(rel, opts?) 列目录，返回 [{ name, path, type }]；`opts.depth` 控制递归层数（默认 1）
 dir 扩展根目录绝对路径
 
 所有方法都经过路径校验，越界时抛异常。
+
+**与 `ctx.project` 对齐（v2.8.2）** —— 两者除了「根目录不同、`ctx.project` 只读」之外，行为完全一致：
+
+| 行为 | `ctx.fs` | `ctx.project` |
+| --- | --- | --- |
+| `read` 支持 `{ encoding, maxBytes }` | ✅ | ✅ |
+| 超限时的错误码 | `FS_TOO_LARGE` | `PROJECT_FS_TOO_LARGE` |
+| `list` 返回项含 `name` / `path` / `type` | ✅ | ✅ |
+| `list` 支持 `{ depth }` 递归 | ✅ | ✅ |
+| `list` 目标不存在 | 抛「目录不存在」 | 抛「目录不存在」 |
+| `list` 目标是文件 | 抛「不是目录」 | 抛「不是目录」 |
+| `stat` | ❌ 无 | ✅ 有 |
+| `write` / `delete` | ✅ 有 | ❌ 只读 |
+
+`ctx.fs` 的 `maxBytes` 默认取 `server.json` 的 `api.fs.maxReadSize`（未设则不限），可在单次调用里用 `{ maxBytes }` 收紧。
+
+```js
+// 大文件保护：超过 64KB 就抛 FS_TOO_LARGE，别把内存读爆
+var big = ctx.fs.read('dump.json', { maxBytes: 64 * 1024 });
+
+// 递归列两层
+var tree = ctx.fs.list('assets', { depth: 2 });
+// → [{ name, path: 'assets/img/logo.png', type: 'file' }, ...]
+
+// 读二进制
+var buf = ctx.fs.read('icon.png', 'buffer');          // 旧写法
+var buf2 = ctx.fs.read('icon.png', { encoding: 'buffer' });  // 新写法
+```
 
 > ⚠️ **`ctx.fs` 是便利封装，不是安全边界。**
 > 它只防止"手滑写错路径"，**不能**阻止扩展直接用原生 `fs` 读写任意文件。
@@ -807,6 +868,7 @@ module.exports = {
 
 默认单文件上限 4 MB，可用 `server.json` 的 `extensions.projectMaxBytes` 调整。
 超限抛出的错误带 `code: 'PROJECT_FS_TOO_LARGE'`。
+`list` 的目标不存在时抛「目录不存在」、目标是文件时抛「不是目录」（与 `ctx.fs.list` 一致，v2.8.2 起）。
 
 ### 扩展安全审计 — vm.js
 
@@ -2905,6 +2967,12 @@ v2.6 内置 UI + 安全审计 视图切换（按目录/按时间）+ 主题切�
 v2.7.0 扩展生命周期 + 路径归一化 服务端 onDispose 钩子；客户端 NavExt.disposer / dispose / isDisposed + pagehide/beforeunload 自动清理 + pageshow(bfcache) 重派 init；urlToRel / relToUrl / pathOf / normalizePath 双端一致（统一 URL 与相对两套路径体系）；5 个教学示例
 v2.7.1 文档拆分 NavExt.md 保留全文并加索引；新增 MD/ 目录：10 篇主题文档 + 导航首页 +《从零写第一个扩展》手把手教程
 v2.8.0 ctx.project 扩展可只读访问站点文件（read/list/stat/exists，三重校验：越界 + 隐藏路径 + 软链接）；修复 urlToRel / relToUrl 只认 .html 扩展名导致 .md/.json/.css 等被误当目录（双实现同步修复）
+v2.8.1 文档同步 补齐 ctx.project 章节与特性表；MD/ 主题文档跟进 v2.8 API；TODO 缺口清单
+v2.8.2 注入顺序解耦 + ctx.fs 对齐 + 配置告警
+
+- **`cssOrder`**：CSS 覆盖顺序与扩展加载顺序解耦 —— `order` 只管加载，`cssOrder` 只管 `styles` 注入先后（越大越晚、越晚胜出）；未声明时回退 `order`，旧行为不变
+- **`ctx.fs` 与 `ctx.project` 对齐**：`read(rel, { encoding, maxBytes })` 超限抛 `FS_TOO_LARGE`；`list` 返回 `path` 字段、支持 `{ depth }` 递归；`list` 目标不存在/非目录时抛错（此前静默返回 `[]`）
+- **`home.routes[].match.env` 启动告警**：配了 `env` 却没配 `value` 的路由永远不会命中，启动时提示
 
 ---
 
