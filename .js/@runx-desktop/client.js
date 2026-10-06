@@ -380,23 +380,42 @@
   /** 真实可视区（物理像素）。
    *  优先用 visualViewport：手机上地址栏收起、软键盘弹起时，布局视口
    *  (innerWidth/innerHeight) 可能纹丝不动，但「可见区域」确实变小了 ——
-   *  window.resize 不触发，visualViewport 才会。 */
+   *  window.resize 不触发，visualViewport 才会。
+   *  注意：两者取**较小**的一边。手机开「桌面版网站」时布局视口会被撑到
+   *  ~980px，而手指能触及的只有 visualViewport 那 ~390px —— 按布局视口
+   *  排版会让桌面右半边跑到屏幕外。 */
   function physViewport() {
     var vv = window.visualViewport;
-    if (vv && vv.width && vv.height) return { w: vv.width, h: vv.height };
-    return { w: root.clientWidth || window.innerWidth, h: root.clientHeight || window.innerHeight };
+    var lw = root.clientWidth || window.innerWidth;
+    var lh = root.clientHeight || window.innerHeight;
+    if (vv && vv.width && vv.height) {
+      return { w: Math.min(vv.width, lw), h: Math.min(vv.height, lh) };
+    }
+    return { w: lw, h: lh };
   }
   /**
-   * 手机上的分辨率回退：视口窄于 680 且配置的是桌面尺寸预设（宽 > 680）时，
-   * 本地回退为「自适应」—— 1280×800 的桌面在 390px 宽的手机上会被等比缩到
-   * 30%，导航条和 Dock 小到没法点。配置本身不动（回到桌面端仍然生效），
-   * 只在手机显示时临时按物理视口排布；想看「手机分辨率桌面」可显式选
-   * 414×896 这类窄预设，不会被回退。
+   * 手机上的分辨率回退：以下情况本地回退为「自适应」——
+   *   a) 配置的是桌面尺寸预设（宽 > 680）—— 1280×800 的桌面在 390px 宽的
+   *      手机上会被等比缩到 30%，导航条和 Dock 小到没法点；
+   *   b) 预设宽高比与可视区宽高比差异过大 —— 如 414×896 的竖屏预设放到
+   *      844×390 的横屏上，铺满缩放会放大 2 倍并把导航条/Dock 裁到视口外。
+   * 配置本身不动（回到桌面端仍然生效），只在窄形态下临时按物理视口排布；
+   * 想看「手机分辨率桌面」可显式选比例合适的窄预设，不会被回退。
    */
   function mobileAutoOverride() {
     if (!narrow()) return false;
     var d = cfg && cfg.display;
-    return !!(d && d.preset && d.preset !== 'auto' && d.w > 680);
+    if (!d || !d.preset || d.preset === 'auto' || !(d.w > 0 && d.h > 0)) return false;
+    if (d.w > 680) return true;                       // a) 桌面尺寸预设
+    // b) 比例差异：预设与可视区的宽高比偏离超过 ~35% 时回退
+    var pv = physViewport();
+    if (pv.w > 0 && pv.h > 0) {
+      var wantRatio = pv.w / pv.h;
+      var presetRatio = d.w / d.h;
+      var dev = Math.abs(wantRatio - presetRatio) / wantRatio;
+      if (dev > 0.35) return true;
+    }
+    return false;
   }
   /** 逻辑桌面尺寸：设了虚拟分辨率就用它，否则等于物理视口（自适应） */
   function viewport() {
@@ -414,8 +433,10 @@
     if (!d || !d.preset || d.preset === 'auto' || !(d.w > 0 && d.h > 0)) return 1;
     if (d.scale === 'fit' || d.scale == null) {
       var pv = physViewport();
-      // 取较小的一边，保证逻辑桌面完整可见（letterbox 而不是裁切）
-      var s = Math.min(pv.w / d.w, pv.h / d.h);
+      // 取**较大**的一边（cover）：桌面铺满整个可视区，宁可裁掉边缘也不能留白 ——
+      // 缩放的桌面若填不满视口，四周会露出宿主页面（尤其手机上开「桌面版网站」
+      // 或横屏窄预设时），既难看又暴露了这不是真的系统界面。
+      var s = Math.max(pv.w / d.w, pv.h / d.h);
       return isFinite(s) && s > 0 ? s : 1;
     }
     var n = Number(d.scale);
@@ -457,14 +478,13 @@
     vscreen.dataset.scaled = scaled ? '1' : '0';
 
     if (scaled) {
-      // 居中：把缩放后的逻辑桌面摆在物理视口正中
-      var ox = Math.max(0, (pv.w - vp.w * s) / 2);
-      var oy = Math.max(0, (pv.h - vp.h * s) / 2);
+      // 铺满（cover）：缩放后的逻辑桌面 ≥ 物理视口，偏移取负值把它推到正中，
+      // 溢出的部分由 .rx-vscreen 的 overflow:hidden 裁掉 —— 页面不会露出留白。
+      var ox = (pv.w - vp.w * s) / 2;
+      var oy = (pv.h - vp.h * s) / 2;
       vscreen.style.transform = 'translate(' + px(ox) + ', ' + px(oy) + ') scale(' + s + ')';
-      root.setAttribute('data-letterbox', '1');
     } else {
       vscreen.style.transform = '';
-      root.removeAttribute('data-letterbox');
     }
 
     // 徽标：只有真的缩放（≠100%）且不是自适应时才提示，避免无意义打扰
@@ -487,11 +507,21 @@
    */
   function applyViewportFrame() {
     var vv = window.visualViewport;
-    if (!vv) return;                       // 旧浏览器：交给 CSS 的 inset:0
+    // 与 physViewport() 用同一套数值，避免「钉住的矩形」与「缩放基准」打架
+    // （两者若不一致，缩放后的桌面偏移会算错，露出宿主页面）。
+    var pv = physViewport();
+    if (!vv) {                            // 旧浏览器：交给 CSS 的 inset:0
+      root.style.left = '0px'; root.style.top = '0px';
+      root.style.width = pv.w + 'px'; root.style.height = pv.h + 'px';
+      root.style.right = 'auto'; root.style.bottom = 'auto';
+      return;
+    }
+    // 键盘顶起时 offsetTop>0，把桌面下移对齐可视区顶部，窗口不被键盘盖住；
+    // 用较小视口尺寸避免桌面版网站下把桌面撑出屏幕。
     root.style.left = (vv.offsetLeft || 0) + 'px';
     root.style.top = (vv.offsetTop || 0) + 'px';
-    root.style.width = vv.width + 'px';
-    root.style.height = vv.height + 'px';
+    root.style.width = pv.w + 'px';
+    root.style.height = pv.h + 'px';
     root.style.right = 'auto';
     root.style.bottom = 'auto';
   }
@@ -964,8 +994,47 @@
     };
   }
 
+  /** 屏幕（设备）物理宽度，取最可靠的来源；拿不到则回落到视口宽 */
+  function deviceWidth() {
+    var s = window.screen || {};
+    var dw = s.width || s.availWidth || 0;
+    if (window.orientation !== undefined && Math.abs(window.orientation) === 90) {
+      // 横屏时 screen.width 可能仍是竖屏宽，用高度兜底
+      dw = Math.max(dw, s.height || 0);
+    }
+    return dw || window.innerWidth || 0;
+  }
+
+  /**
+   * 是否是「窄/移动」形态。
+   * 不能只看 root.clientWidth —— 手机开「桌面版网站」时布局视口被撑到
+   * ~980px，但设备屏幕只有 ~390px，手指够不到右边；旋转成横屏后
+   * root.clientWidth 又会变成 844。判定依据（满足其一即算移动）：
+   *   1) 可视区宽 ≤680
+   *   2) 设备屏宽 ≤680（真机「桌面版网站」时 screen.width 仍是物理宽）
+   *   3) 无 hover 能力（(hover:none)）—— 手机/平板的本质特征，触屏笔记本
+   *      有 (hover:hover)，不会被误判；配合宽视口即可锁定「桌面版网站」模式
+   *   4) 视口被缩放（visualViewport.scale > 1）
+   */
+  function noHover() {
+    try { return window.matchMedia && window.matchMedia('(hover: none)').matches; }
+    catch (e) { return false; }
+  }
   function narrow() {
-    return !!(root.clientWidth && root.clientWidth <= 680);
+    var w = (root.clientWidth || window.innerWidth || 0);
+    var dw = deviceWidth();
+    if (w && w <= 680) return true;                          // ① 可视区窄
+    if (dw && dw <= 680) return true;                        // ② 设备屏窄
+    // ③ 无 hover + 粗指针（真手机/平板；触屏笔记本是 (hover:hover)，排除）
+    //    且屏幕物理宽不宽 —— 宽视口只可能来自「桌面版网站」，按移动排版
+    var touchOnly = noHover() &&
+      window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+    if (touchOnly && dw && dw <= 900) return true;
+    if (touchOnly) {
+      var vv = window.visualViewport;
+      if (vv && vv.scale > 1.05) return true;                // ④ 视口被缩放
+    }
+    return false;
   }
 
   /**
@@ -2412,10 +2481,10 @@
     body.appendChild(sRow);
     body.appendChild(el('div', 'caption',
       '当前逻辑桌面 ' + viewport().w + ' × ' + viewport().h +
-      '，缩放 ' + Math.round(displayScale() * 100) + '%。手机横竖屏切换后会自动重算。' +
+      '，缩放 ' + Math.round(displayScale() * 100) + '%。' +
       (mobileAutoOverride()
         ? '手机上已临时回退为自适应（原设置保留，桌面端不受影响）。'
-        : '')));
+        : '桌面按铺满方式缩放，比例不符时边缘会被裁掉。手机横竖屏切换后会自动重算。')));
 
     /* ── 新建窗口的默认尺寸 ── */
     body.appendChild(el('div', 'section-label', '新窗口默认尺寸'));
@@ -3028,6 +3097,30 @@
   }
 
   /* ═══════════════════════════════════════════════════════════════════
+   * 封死宿主页面滚动
+   *
+   * 桌面是 position:fixed 的全屏层，但**宿主页面本身**仍可能有可滚动内容
+   * （比如内建的目录/文件列表）。手机上一旦页面可滚（尤其在「桌面版网站」
+   * 模式或横屏下按布局视口算出来的页面高于屏幕），手指滑动就会把整个页面
+   * 连同桌面层一起滚走，露出桌面背后的 host 内容 —— 看起来就是「露馅」。
+   * 这里把 html/body 钉死：overflow:hidden + touch-action 限制 + position:fixed
+   * 消除页面级滚动，同时保留 #runx-desktop 内部自身的 overflow 滚动。
+   * ═══════════════════════════════════════════════════════════════════ */
+  function lockHostScroll() {
+    var html = document.documentElement, body = document.body;
+    if (!html || !body) return;
+    var css = document.createElement('style');
+    css.id = '__runx_host_lock__';
+    css.textContent =
+      'html,body{overflow:hidden!important;height:100%!important;' +
+      'max-height:100%!important;overscroll-behavior:none!important;' +
+      'margin:0!important;padding:0!important;}' +
+      // body 用 fixed 是为了彻底断掉 iOS Safari 的整页橡皮筋/滚动
+      'body{position:fixed!important;inset:0!important;width:100%!important;}';
+    (document.head || html).appendChild(css);
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════
    * Android 返回键 / 系统返回：关掉最上层浮层或窗口，而不是直接退出页面
    * 用 history 哨兵拦截 popstate：有层可关就关、并重新占位；
    * 没有层则放行，别把用户困在页面里。
@@ -3089,6 +3182,7 @@
   }
 
   ensureViewportMeta();
+  lockHostScroll();   // 钉死宿主页面滚动，防止滑动手势把桌面层一起滚走露馅
 
   Promise.all([api('/desktop'), api('/apps')]).then(function (res) {
     cfg = res[0] || {};
