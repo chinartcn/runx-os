@@ -74,9 +74,36 @@
   };
 
   /** 时长归一化 —— 与内核 os.safeMs 同源思路：NaN 会让浏览器把定时器降级成 1ms */
+  // 时长归一化。与内核 os.safeMs 同一套语义：接受数字毫秒，也接受
+  // "500ms" / "2s" / "1.5m" / "1h" 这类单位字符串；坏值回落 dflt，再夹到 [min,max]。
+  // 返回值**永远是有限数**，杜绝 setTimeout(NaN) 静默降级成 1ms 空转。
+  var MS_UNITS = {
+    ms: 1, msec: 1, msecs: 1, millisecond: 1, milliseconds: 1,
+    s: 1000, sec: 1000, secs: 1000, second: 1000, seconds: 1000,
+    m: 60000, min: 60000, mins: 60000, minute: 60000, minutes: 60000,
+    h: 3600000, hr: 3600000, hrs: 3600000, hour: 3600000, hours: 3600000,
+    d: 86400000, day: 86400000, days: 86400000
+  };
+  function parseMs(v) {
+    if (typeof v === 'number') return isFinite(v) ? v : NaN;
+    if (typeof v !== 'string') return NaN;
+    var s = v.trim().toLowerCase();
+    if (!s) return NaN;
+    if (/^[+-]?(?:\d+\.?\d*|\.\d+)$/.test(s)) {
+      var n = Number(s);
+      return isFinite(n) ? n : NaN;
+    }
+    var m = /^([+-]?(?:\d+\.?\d*|\.\d+))\s*([a-z]+)$/.exec(s);
+    if (!m) return NaN;
+    var num = Number(m[1]);
+    var unit = MS_UNITS[m[2]];
+    if (!unit || !isFinite(num)) return NaN;
+    return isFinite(num * unit) ? num * unit : NaN;
+  }
   function safeMs(v, dflt, min, max) {
-    var n = typeof v === 'string' ? Number(v) : v;
-    if (typeof n !== 'number' || !isFinite(n)) n = dflt;
+    var n = parseMs(v);
+    if (!isFinite(n)) n = dflt;
+    if (!isFinite(n)) n = isFinite(min) ? min : 0;
     return Math.min(max, Math.max(min, n));
   }
   function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
@@ -187,8 +214,20 @@
     if (app.type === 'node') return 'http://' + location.hostname + ':' + app.port + '/';
     return BASE + '/apps/' + app.name + '/';
   }
+  /**
+   * 应用是否在运行。
+   * /runx/apps 返回的形状是 { name, type, ..., status: { state, pid } } ——
+   * 状态嵌在 status 里，不在顶层。历史上这里只读 app.state，于是恒为 false：
+   * 图标角标永远不亮、恢复窗口时误判「没在跑」而跳过。两种形状都兼容。
+   */
+  function appState(app) {
+    if (!app) return '';
+    return (app.status && app.status.state) || app.state || '';
+  }
   function isRunning(app) {
-    return !!app && (app.state === 'running' || app.state === 'restarting' || app.type === 'web');
+    if (!app) return false;
+    var s = appState(app);
+    return s === 'running' || s === 'restarting' || app.type === 'web';
   }
   function winId(name) { return 'win-' + name; }
 
@@ -410,6 +449,142 @@
   }
 
   /* ═══════════════════════════════════════════════════════════════════
+   * 窗口几何持久化
+   *
+   * 目标（§3.1 窗口可移动/缩放）：刷新页面后窗口还在原来的位置和大小。
+   *
+   * 设计取舍：
+   *   · **不做实时同步**。拖动/缩放过程中每一帧都发请求会把内核写爆 ——
+   *     所以写盘只在「稳定状态」触发：松手、最大化/全屏切换、关闭、最小化，
+   *     并且统一走 debounce（300ms）合并连续操作。
+   *   · **整体覆盖式写入**。客户端持有全部窗口状态，PUT 一次写全量，
+   *     比逐窗口 PATCH 少很多请求，也不会出现半更新状态。
+   *   · **恢复时重新夹取**。存档里的几何是「当时的视口」下算出来的；用户
+   *     可能把手机横过来、或换到更小的屏幕上。恢复时必须按**当前** workArea
+   *     重新夹一遍，否则窗口会跑到屏幕外，用户以为数据丢了。
+   *   · 只恢复**仍然存在**的 app（应用可能已被卸载）。
+   * ═══════════════════════════════════════════════════════════════════ */
+  var winSaveTimer = null;
+  // 恢复流程中置位：期间 saveWindows 只记「待写」不真发请求，
+  // 由 restoreWindows 收尾时统一落盘一次 —— 否则恢复 3 个窗口要发很多次 PUT。
+  var restoring = false;
+
+  function winSnapshot() {
+    return order.map(function (id) {
+      var rec = windows[id];
+      if (!rec) return null;
+      var g = rec.geom || currentGeom(rec);
+      // 最大化/全屏时 offsetWidth 是铺满后的尺寸，要记住的是「还原后」的几何 ——
+      // rec.restored 正是为此存的。
+      if ((rec.maximized || rec.fullscreen) && rec.restored) g = rec.restored;
+      return {
+        app: rec.app.name,
+        x: Math.round(g.x), y: Math.round(g.y),
+        w: Math.round(g.w), h: Math.round(g.h),
+        minimized: !!rec.minimized,
+        maximized: !!rec.maximized,
+        fullscreen: !!rec.fullscreen,
+        toolbarStyle: toolbarStyleOf(rec),
+        z: rec.el ? (parseInt(rec.el.style.zIndex, 10) || 1) : 1,
+      };
+    }).filter(Boolean);
+  }
+
+  function toolbarStyleOf(rec) {
+    if (rec.el.classList.contains('unifiedCompact')) return 'unifiedCompact';
+    if (rec.el.classList.contains('expanded')) return 'expanded';
+    return 'unified';
+  }
+
+  function saveWindowsNow() {
+    if (restoring) return;                 // 恢复期间不落盘，收尾时统一写
+    var body = { windows: winSnapshot() };
+    return api('/desktop/windows', { method: 'PUT', body: JSON.stringify(body) })
+      .catch(function (e) { showToast('窗口布局没能保存：' + e.message); });
+  }
+
+  /** 合并短时间内的多次几何变化，避免拖动/缩放期间请求风暴 */
+  function saveWindows() {
+    if (restoring) return;
+    if (winSaveTimer) clearTimeout(winSaveTimer);
+    winSaveTimer = setTimeout(function () {
+      winSaveTimer = null;
+      saveWindowsNow();
+    }, safeMs(300, 300, 80, 4000));
+  }
+
+  /** 页面要走了：把待写的快照尽力塞出去 */
+  function flushWindows() {
+    if (!winSaveTimer && !restoring) return;
+    if (winSaveTimer) { clearTimeout(winSaveTimer); winSaveTimer = null; }
+    restoring = false;                     // 收尾写盘要能真的执行
+    var payload = JSON.stringify({ windows: winSnapshot() });
+    try {
+      // keepalive 让请求在页面卸载后仍能完成（Chrome/Safari 都支持）
+      fetch(BASE + API + '/desktop/windows', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: payload, keepalive: true,
+      }).catch(function () {});
+      return;
+    } catch (e) { /* 落到下面的同步兜底 */ }
+    try {
+      var xhr = new XMLHttpRequest();
+      xhr.open('PUT', BASE + API + '/desktop/windows', false);
+      xhr.setRequestHeader('Content-Type', 'application/json');
+      xhr.send(payload);
+    } catch (e) { /* 页面卸载中，尽力而为 */ }
+  }
+
+  /**
+   * 把存档里的几何夹回当前视口。
+   * 规则与拖动一致：至少保留 120px（或半宽）标题栏在可视区内，
+   * 这样即使用户从大屏切到手机，窗口也不会「消失」在屏幕外抓不到。
+   */
+  function clampGeomToView(g) {
+    var wa = workArea(), view = viewport();
+    var w = clamp(g.w, 280, Math.max(280, wa.w));
+    var h = clamp(g.h, 180, Math.max(180, wa.h));
+    var keepH = Math.min(120, w * 0.5);
+    return {
+      w: w, h: h,
+      x: clamp(g.x, -(w - keepH), Math.max(-(w - keepH), view.w - keepH)),
+      y: clamp(g.y, wa.top, Math.max(wa.top, view.h - 34)),
+    };
+  }
+
+  /** 启动时按存档恢复窗口，返回恢复的个数 */
+  function restoreWindows(saved) {
+    if (!saved || !saved.length) return 0;
+    restoring = true;
+    // z 小的先开，这样 z 大的自然叠在上面
+    var list = saved.slice().sort(function (a, b) { return (a.z || 1) - (b.z || 1); });
+    var n = 0;
+    try {
+      list.forEach(function (s) {
+        if (!s || !s.app) return;
+        var app = appOf(s.app);
+        if (!app) return;                                  // 应用已不在 apps.json 里
+        // node 应用没在跑就不恢复 —— 否则会开出一堆连不上的死窗口。
+        // 判断走 isRunning（它读的是 refreshApps 摊平后的 app.state）。
+        if (!isRunning(app)) return;
+        var id = openApp(s.app, { silent: true, geom: clampGeomToView(s) });
+        if (!id || !windows[id]) return;
+        if (s.toolbarStyle && s.toolbarStyle !== 'unified') setToolbarStyle(id, s.toolbarStyle);
+        if (s.minimized) minimizeWindow(id);
+        if (s.maximized) toggleMaximize(id);
+        if (s.fullscreen) toggleFullscreen(id);
+        n++;
+      });
+      if (activeId) focusWindow(activeId);
+    } finally {
+      restoring = false;
+    }
+    // 夹取后的几何可能与存档不同，同步一次让存档与现状一致
+    if (n) saveWindowsNow();
+    return n;
+  }
+
+  /* ═══════════════════════════════════════════════════════════════════
    * 窗口
    * ═══════════════════════════════════════════════════════════════════ */
   function defaultGeom(index) {
@@ -431,19 +606,29 @@
     return !!(root.clientWidth && root.clientWidth <= 680);
   }
 
-  function openApp(name) {
+  /**
+   * 打开应用窗口。
+   * @param {string} name  应用名
+   * @param {{silent?:boolean, geom?:object}} [opts]
+   *        silent —— 恢复流程中调用：不弹提示、不抢焦点、不触发落盘（由
+   *                  restoreWindows 统一收尾），避免刷新时一串提示糊满屏
+   *        geom   —— 指定初始几何（恢复存档时用），不传则走 defaultGeom
+   * @returns {string|null} 窗口 id（已存在则返回既有 id）
+   */
+  function openApp(name, opts) {
+    opts = opts || {};
     var app = appOf(name);
-    if (!app) { showToast('找不到应用「' + name + '」'); return; }
+    if (!app) { showToast('找不到应用「' + name + '」'); return null; }
     var id = winId(name);
 
     var rec = windows[id];
     if (rec) {
       if (rec.hidden || rec.minimized) showWindow(id);
       else focusWindow(id);
-      return;
+      return id;
     }
 
-    var g = defaultGeom(order.length);
+    var g = opts.geom || defaultGeom(order.length);
     // 窄屏用紧凑工具栏：手机上垂直空间比「控件好按」更稀缺
     var initialStyle = narrow() ? 'unifiedCompact' : 'unified';
     var w = el('div', 'rx-window rx-material-regular' +
@@ -632,9 +817,12 @@
     });
 
     focusWindow(id);
-    announce(appTitle(app) + ' 已打开');
-    renderDock();
-    return recNew;
+    if (!opts.silent) {
+      announce(appTitle(app) + ' 已打开');
+      renderDock();
+      saveWindows();          // 新窗口出现 → 记一笔，刷新后还能复原
+    }
+    return id;
   }
 
   function toolBtn(path, label, onClick) {
@@ -653,6 +841,7 @@
     rec.el.classList.remove('unified', 'unifiedCompact', 'expanded');
     if (style !== 'unified') rec.el.classList.add(style);
     announce('工具栏样式：' + ({ unified: '统一', unifiedCompact: '紧凑', expanded: '展开' }[style] || style));
+    saveWindows();            // 工具栏样式属于窗口偏好，值得记
   }
 
   function focusWindow(id) {
@@ -715,6 +904,7 @@
     }, safeMs(200, 200, 0, 1200));
     if (activeId === id) activeId = nextVisibleId(id);
     renderDock(); renderMenus();
+    saveWindows();            // 最小化状态也记下来：刷新后它仍在 Dock 里而不是弹回来
     announce(appTitle(rec.app) + ' 已最小化');
   }
   function nextVisibleId(exceptId) {
@@ -739,6 +929,7 @@
     if (activeId === id) activeId = nextVisibleId(id);
     if (activeId) focusWindow(activeId);
     renderDock(); renderMenus();
+    saveWindows();            // 关掉的窗口不该在刷新后复活
     if (notify !== false) announce(appTitle(rec.app) + ' 已关闭');
   }
 
@@ -759,6 +950,7 @@
       rec.el.classList.add('maximized');
       announce('已最大化');
     }
+    saveWindows();
   }
 
   function toggleFullscreen(id) {
@@ -777,6 +969,7 @@
       rec.maximized = false;
       announce('已进入全屏，按 ⌘⌃F 或 Esc 退出');
     }
+    saveWindows();
   }
 
   function currentGeom(rec) {
@@ -860,6 +1053,7 @@
       };
       applyGeom(rec, snapped);
       rec.geom = snapped;
+      saveWindows();          // 落位完成才写盘（拖动过程中不写）
     }
     dragState = null;
     unbindGlobal(dragMove, dragEnd);
@@ -914,6 +1108,7 @@
       rec.el.classList.remove('resizing');
       rec.geom = currentGeom(rec);
       showToastRect(rec);
+      saveWindows();          // 缩放结束才写盘
     }
     resizeState = null;
     unbindGlobal(resizeMove, resizeEnd);
@@ -1776,6 +1971,9 @@
   function refreshApps() {
     return api('/apps').then(function (d) {
       apps = (d && d.apps) || [];
+      // 把 status.state 摊到顶层：内核把状态放在 app.status 里，
+      // 而 UI 各处（角标、菜单可用性、窗口恢复）都按 app.state 读。
+      apps.forEach(function (a) { if (!a.state) a.state = appState(a); });
       renderIcons();
       renderDock();
       var running = apps.filter(isRunning).length;
@@ -1942,10 +2140,24 @@
     if (cfg.meta && cfg.meta.assets_base) ASSET_BASE = cfg.meta.assets_base;
     apps = (res[1] && res[1].apps) || [];
     render();
-    refreshApps().catch(function () { /* 首轮失败不影响桌面渲染 */ });
+    refreshApps()
+      .then(function () {
+        // 应用状态拿到之后再恢复窗口：node 应用没起来时不该开出一堆死窗口。
+        // silent，避免刷新时一串「已打开」提示糊满屏。
+        try { restoreWindows(cfg.windows); } catch (e) { /* 恢复失败不该拖垮桌面 */ }
+      })
+      .catch(function () { /* 首轮失败不影响桌面渲染 */ });
   }).catch(function (e) {
     console.error('RunX 桌面加载失败：', e);
     showToast('桌面加载失败：' + e.message, 6000);
+  });
+
+  /* 离开页面前把待写的窗口几何塞出去。
+     只用 pagehide/visibilitychange：beforeunload 在移动端常常不触发，
+     而且它一旦设了 returnValue 就会弹原生确认框，很打扰。 */
+  window.addEventListener('pagehide', flushWindows);
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'hidden') flushWindows();
   });
 
   // 暴露一点调试接口（控制台里 `__runx.windows` 很顺手）
@@ -1959,5 +2171,9 @@
     hideOthers: hideOthers,
     tidy: tidyIcons,
     toast: showToast,
+    // 调试窗口几何持久化：__runx.winSnapshot() 看当前快照，
+    // __runx.saveWindows() 立刻落盘。
+    winSnapshot: winSnapshot,
+    saveWindows: saveWindowsNow,
   };
 })();
