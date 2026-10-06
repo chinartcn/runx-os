@@ -44,33 +44,73 @@
     if (text != null) n.textContent = text;
     return n;
   }
-  function svgIcon(path, extra) {
-    // 统一 16px / 1.6 线宽的图标体格，保证一组图标风格协调（§2.3）
+  // 渲染一个图标：icon 为 ICON[key]（含 inner 标记 + viewBox + 线宽）。
+  // 支持 <path>/<circle>/<rect>/<polyline>/<polygon> 等多种形状，统一用
+  // currentColor 描边，随文字颜色（含强调色）自动着色。
+  function svgIcon(icon) {
+    icon = icon || {};
+    var vb = icon.vb || '0 0 16 16';
+    var sw = (icon.sw != null) ? icon.sw : 1.6;
     var s = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    s.setAttribute('viewBox', '0 0 16 16');
+    s.setAttribute('viewBox', vb);
     s.setAttribute('fill', 'none');
     s.setAttribute('stroke', 'currentColor');
-    s.setAttribute('stroke-width', '1.6');
+    s.setAttribute('stroke-width', String(sw));
     s.setAttribute('stroke-linecap', 'round');
     s.setAttribute('stroke-linejoin', 'round');
     s.setAttribute('aria-hidden', 'true');
-    var p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-    p.setAttribute('d', path);
-    s.appendChild(p);
-    if (extra) extra.forEach(function (d) {
-      var q = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      q.setAttribute('d', d); s.appendChild(q);
-    });
+    var dims = vb.split(' ');
+    s.setAttribute('width', String(dims[2] || 16));
+    s.setAttribute('height', String(dims[3] || 16));
+    if (icon.inner) s.innerHTML = icon.inner;   // SVG 上下文内解析子元素
     return s;
   }
+  // 菜单字形：ICON 键 → SVG 图标；否则按纯文本字形（如 ⌘ 修饰符）原样呈现
+  function glyphNode(g) {
+    var n = el('span', 'rx-menu-glyph');
+    if (g && ICON[g]) {
+      var s = svgIcon(ICON[g]);
+      s.setAttribute('width', '14'); s.setAttribute('height', '14');
+      n.appendChild(s);
+    } else if (g) {
+      n.textContent = g;
+    }
+    return n;
+  }
+  // 应用兜底图标：把 SVG 图标放进指定容器类，并给定像素尺寸
+  function iconSpan(key, cls, size) {
+    var n = el('span', cls);
+    var s = svgIcon(ICON[key]);
+    s.setAttribute('width', String(size)); s.setAttribute('height', String(size));
+    n.appendChild(s);
+    return n;
+  }
   var ICON = {
-    close:   'M4 4l8 8M12 4l-8 8',
-    minus:   'M4 8h8',
-    expand:  'M6 2H2v4M10 14h4v-4M2 6V2h4M14 10v4h-4',
-    shrink:  'M6 6H2V2M10 10h4v4M2 2l4 4M14 14l-4-4',
-    reload:  'M13.5 8a5.5 5.5 0 1 1-1.7-3.95M13.5 2v3.2h-3.2',
-    home:    'M2.5 7.5 8 2.8l5.5 4.7M4 7v6.5h8V7',
-    app:     'M3 3h4v4H3zM9 3h4v4H9zM3 9h4v4H3zM9 9h4v4H9z',
+    // ── 原 16×16 线框图标（窗口工具栏 / 开始按钮）──
+    close:   { inner: '<path d="M4 4l8 8M12 4l-8 8"/>', vb: '0 0 16 16', sw: 1.6 },
+    minus:   { inner: '<path d="M4 8h8"/>', vb: '0 0 16 16', sw: 1.6 },
+    expand:  { inner: '<path d="M6 2H2v4M10 14h4v-4M2 6V2h4M14 10v4h-4"/>', vb: '0 0 16 16', sw: 1.6 },
+    shrink:  { inner: '<path d="M6 6H2V2M10 10h4v4M2 2l4 4M14 14l-4-4"/>', vb: '0 0 16 16', sw: 1.6 },
+    reload:  { inner: '<path d="M13.5 8a5.5 5.5 0 1 1-1.7-3.95"/><path d="M13.5 2v3.2h-3.2"/>', vb: '0 0 16 16', sw: 1.6 },
+    home:    { inner: '<path d="M2.5 7.5 8 2.8l5.5 4.7"/><path d="M4 7v6.5h8V7"/>', vb: '0 0 16 16', sw: 1.6 },
+    app:     { inner: '<path d="M3 3h4v4H3zM9 3h4v4H9zM3 9h4v4H3zM9 9h4v4H9z"/>', vb: '0 0 16 16', sw: 1.6 },
+    // ── Lucide 图标库（24×24，ISC 许可）── 替代原本的 emoji 与符号字形
+    package: { inner: '<path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z" /> <path d="M12 22V12" /> <path d="m3.3 7 7.703 4.734a2 2 0 0 0 1.994 0L20.7 7" /> <path d="m7.5 4.27 9 5.15" />', vb: '0 0 24 24', sw: 2 },
+    settings: { inner: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z" /> <circle cx="12" cy="12" r="3" />', vb: '0 0 24 24', sw: 2 },
+    power: { inner: '<path d="M12 2v10" /> <path d="M18.4 6.6a9 9 0 1 1-12.77.04" />', vb: '0 0 24 24', sw: 2 },
+    external: { inner: '<path d="M15 3h6v6" /> <path d="M10 14 21 3" /> <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />', vb: '0 0 24 24', sw: 2 },
+    trash: { inner: '<path d="M3 6h18" /> <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /> <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" /> <line x1="10" x2="10" y1="11" y2="17" /> <line x1="14" x2="14" y1="11" y2="17" />', vb: '0 0 24 24', sw: 2 },
+    search: { inner: '<circle cx="11" cy="11" r="8" /> <path d="m21 21-4.3-4.3" />', vb: '0 0 24 24', sw: 2 },
+    terminal: { inner: '<polyline points="4 17 10 11 4 5" /> <line x1="12" x2="20" y1="19" y2="19" />', vb: '0 0 24 24', sw: 2 },
+    zap: { inner: '<path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z" />', vb: '0 0 24 24', sw: 2 },
+    grid: { inner: '<rect width="7" height="7" x="3" y="3" rx="1" /> <rect width="7" height="7" x="14" y="3" rx="1" /> <rect width="7" height="7" x="14" y="14" rx="1" /> <rect width="7" height="7" x="3" y="14" rx="1" />', vb: '0 0 24 24', sw: 2 },
+    maximize: { inner: '<path d="M8 3H5a2 2 0 0 0-2 2v3" /> <path d="M21 8V5a2 2 0 0 0-2-2h-3" /> <path d="M3 16v3a2 2 0 0 0 2 2h3" /> <path d="M16 21h3a2 2 0 0 0 2-2v-3" />', vb: '0 0 24 24', sw: 2 },
+    minimize: { inner: '<polyline points="4 14 10 14 10 20" /> <polyline points="20 10 14 10 14 4" /> <line x1="14" x2="21" y1="10" y2="3" /> <line x1="3" x2="10" y1="21" y2="14" />', vb: '0 0 24 24', sw: 2 },
+    check: { inner: '<path d="M20 6 9 17l-5-5" />', vb: '0 0 24 24', sw: 2 },
+    info: { inner: '<circle cx="12" cy="12" r="10" /> <path d="M12 16v-4" /> <path d="M12 8h.01" />', vb: '0 0 24 24', sw: 2 },
+    play: { inner: '<polygon points="6 3 20 12 6 21 6 3" />', vb: '0 0 24 24', sw: 2 },
+    dot: { inner: '<circle cx="12" cy="12" r="5" fill="currentColor" stroke="none"/>', vb: '0 0 24 24', sw: 2 },
+    stop: { inner: '<rect x="5" y="5" width="14" height="14" rx="2" fill="currentColor" stroke="none"/>', vb: '0 0 24 24', sw: 2 },
   };
 
   /** 时长归一化 —— 与内核 os.safeMs 同源思路：NaN 会让浏览器把定时器降级成 1ms */
@@ -498,12 +538,12 @@
         img.draggable = false;
         img.addEventListener('error', function () {
           // 图标文件缺失 / 404：换成占位方块，别在桌面上留个破图
-          var ph = el('div', 'rx-emoji', '📦');
+          var ph = iconSpan('package', 'rx-emoji', 30);
           if (img.parentNode) img.parentNode.replaceChild(ph, img);
         });
         node.appendChild(img);
       } else {
-        node.appendChild(el('div', 'rx-emoji', '📦'));
+        node.appendChild(iconSpan('package', 'rx-emoji', 30));
       }
       node.appendChild(el('span', 'rx-label', ic.label || appTitle(app)));
 
@@ -1498,12 +1538,12 @@
         var img = el('img', 'rx-dock-ico');
         img.src = url; img.alt = ''; img.draggable = false;
         img.addEventListener('error', function () {
-          var ph = el('span', 'rx-dock-ico', '📦');
+          var ph = iconSpan('package', 'rx-dock-ico', 16);
           if (img.parentNode) img.parentNode.replaceChild(ph, img);
         });
         b.appendChild(img);
       } else {
-        b.appendChild(el('span', 'rx-dock-ico', '📦'));
+        b.appendChild(iconSpan('package', 'rx-dock-ico', 16));
       }
       b.appendChild(el('span', 'rx-dock-name', appTitle(rec.app)));
       b.appendChild(el('span', 'rx-dock-ind'));
@@ -1539,7 +1579,7 @@
           img.src = url; img.alt = ''; img.draggable = false;
           b.appendChild(img);
         } else {
-          b.appendChild(el('span', 'rx-dock-ico', '📦'));
+          b.appendChild(iconSpan('package', 'rx-dock-ico', 16));
         }
         b.addEventListener('click', function () { openApp(a.name); });
         dock.appendChild(b);
@@ -1562,10 +1602,10 @@
     var name = rec ? appTitle(rec.app) : 'RunX OS';
 
     var appMenu = [
-      { label: '关于 RunX OS', glyph: 'ⓘ', act: showAbout },
+      { label: '关于 RunX OS', glyph: 'info', act: showAbout },
       { sep: true },
-      { label: '应用管理…', glyph: '▦', key: '⌘⇧A', act: openAppManager },
-      { label: '桌面设置…', glyph: '⚙', key: '⌘,', act: openSettings },
+      { label: '应用管理…', glyph: 'grid', key: '⌘⇧A', act: openAppManager },
+      { label: '桌面设置…', glyph: 'settings', key: '⌘,', act: openSettings },
       { sep: true },
       { label: '隐藏 ' + name, key: '⌘H', disabled: disabled, act: function () { hideWindow(activeId); } },
       { label: '隐藏其他', key: '⌘⌥H', disabled: disabled, act: hideOthers },
@@ -1579,23 +1619,23 @@
     ];
 
     var fileMenu = [
-      { label: '打开应用…', glyph: '↗', key: '⌘O', act: openLauncher },
-      { label: '重新加载应用', glyph: '⟳', key: '⌘R', disabled: disabled, act: function () {
+      { label: '打开应用…', glyph: 'external', key: '⌘O', act: openLauncher },
+      { label: '重新加载应用', glyph: 'reload', key: '⌘R', disabled: disabled, act: function () {
           var r = windows[activeId]; if (!r) return;
           r.veilHint.textContent = '正在加载…'; r.veil.classList.remove('hidden');
           r.iframe.src = appOrigin(r.app);
         } },
-      { label: '让应用在浏览器新标签打开', glyph: '⎋', disabled: disabled, act: function () {
+      { label: '让应用在浏览器新标签打开', glyph: 'external', disabled: disabled, act: function () {
           var r = windows[activeId]; if (!r) return;
           window.open(appOrigin(r.app), '_blank', 'noopener');
         } },
       { sep: true },
-      { label: '启动应用进程', glyph: '▶', disabled: disabled || isRunning(rec.app), act: function () {
+      { label: '启动应用进程', glyph: 'play', disabled: disabled || isRunning(rec.app), act: function () {
           api('/apps/' + encodeURIComponent(rec.app.name) + '/start', { method: 'POST' })
             .then(refreshApps).then(function () { showToast('已启动 ' + appTitle(rec.app)); })
             .catch(function (e) { showToast('启动失败：' + e.message); });
         } },
-      { label: '停止应用进程', glyph: '■', disabled: disabled || !isRunning(rec.app), act: function () {
+      { label: '停止应用进程', glyph: 'stop', disabled: disabled || !isRunning(rec.app), act: function () {
           api('/apps/' + encodeURIComponent(rec.app.name) + '/stop', { method: 'POST' })
             .then(refreshApps).then(function () { showToast('已停止 ' + appTitle(rec.app)); })
             .catch(function (e) { showToast('停止失败：' + e.message); });
@@ -1613,8 +1653,8 @@
       { label: '粘贴', key: '⌘V', disabled: disabled, act: function () { postToApp('paste'); } },
       { label: '全选', key: '⌘A', disabled: disabled, act: function () { postToApp('selectAll'); } },
       { sep: true },
-      { label: '在应用中查找…', glyph: '⌕', key: '⌘F', disabled: disabled, act: function () { postToApp('find'); } },
-      { label: '清空终端会话', glyph: '⌫', disabled: disabled, act: function () {
+      { label: '在应用中查找…', glyph: 'search', key: '⌘F', disabled: disabled, act: function () { postToApp('find'); } },
+      { label: '清空终端会话', glyph: 'trash', disabled: disabled, act: function () {
           // 终端应用的清屏：往它的窗口里注入一条输入（应用自己解释）
           var r = windows[activeId];
           if (!r) return;
@@ -1624,9 +1664,9 @@
     ];
 
     var viewMenu = [
-      { label: rec && rec.fullscreen ? '退出全屏' : '进入全屏', glyph: '⛶', key: '⌘⌃F', disabled: disabled,
+      { label: rec && rec.fullscreen ? '退出全屏' : '进入全屏', glyph: 'expand', key: '⌘⌃F', disabled: disabled,
         act: function () { toggleFullscreen(activeId); } },
-      { label: rec && rec.maximized ? '退出最大化' : '最大化', glyph: '▢', key: '⌘⌃M', disabled: disabled,
+      { label: rec && rec.maximized ? '退出最大化' : '最大化', glyph: 'maximize', key: '⌘⌃M', disabled: disabled,
         act: function () { toggleMaximize(activeId); } },
       { label: '恢复正常大小', disabled: disabled || !(rec && (rec.maximized || rec.fullscreen)),
         act: function () {
@@ -1636,17 +1676,17 @@
         } },
       { sep: true },
       { head: '工具栏样式' },
-      { label: '统一', glyph: rec && rec.toolbarStyle === 'unified' ? '✓' : '', disabled: disabled,
+      { label: '统一', glyph: rec && rec.toolbarStyle === 'unified' ? 'check' : '', disabled: disabled,
         act: function () { setToolbarStyle(activeId, 'unified'); syncSegment(activeId, 'unified'); } },
-      { label: '紧凑统一', glyph: rec && rec.toolbarStyle === 'unifiedCompact' ? '✓' : '', disabled: disabled,
+      { label: '紧凑统一', glyph: rec && rec.toolbarStyle === 'unifiedCompact' ? 'check' : '', disabled: disabled,
         act: function () { setToolbarStyle(activeId, 'unifiedCompact'); syncSegment(activeId, 'unifiedCompact'); } },
-      { label: '展开', glyph: rec && rec.toolbarStyle === 'expanded' ? '✓' : '', disabled: disabled,
+      { label: '展开', glyph: rec && rec.toolbarStyle === 'expanded' ? 'check' : '', disabled: disabled,
         act: function () { setToolbarStyle(activeId, 'expanded'); syncSegment(activeId, 'expanded'); } },
       { sep: true },
       { head: '外观' },
-      { label: '浅色', glyph: cfg && cfg.theme === 'light' ? '✓' : '', act: function () { setTheme('light'); } },
-      { label: '深色', glyph: cfg && cfg.theme === 'dark' ? '✓' : '', act: function () { setTheme('dark'); } },
-      { label: '跟随系统', glyph: !cfg || cfg.theme === 'auto' ? '✓' : '', act: function () { setTheme('auto'); } },
+      { label: '浅色', glyph: cfg && cfg.theme === 'light' ? 'check' : '', act: function () { setTheme('light'); } },
+      { label: '深色', glyph: cfg && cfg.theme === 'dark' ? 'check' : '', act: function () { setTheme('dark'); } },
+      { label: '跟随系统', glyph: !cfg || cfg.theme === 'auto' ? 'check' : '', act: function () { setTheme('auto'); } },
       { sep: true },
       { head: '显示分辨率' },
     ];
@@ -1656,16 +1696,16 @@
     ((cfg && cfg.meta && cfg.meta.display_presets) || []).forEach(function (p) {
       var on = ((cfg.display && cfg.display.preset) || 'auto') === p.id;
       viewMenu.push({
-        label: p.label, glyph: on ? '✓' : '',
+        label: p.label, glyph: on ? 'check' : '',
         act: function () { setDisplay({ preset: p.id, scale: p.scale || 'fit' }); },
       });
     });
-    viewMenu.push({ label: '显示设置…', glyph: '⚙', act: openSettings });
+    viewMenu.push({ label: '显示设置…', glyph: 'settings', act: openSettings });
 
     viewMenu.push({ sep: true }, { head: '强调色' });
     ((cfg && cfg.meta && cfg.meta.accents) || []).forEach(function (a) {
       viewMenu.push({
-        label: a.label, glyph: (cfg.accent || 'blue') === a.id ? '✓' : '',
+        label: a.label, glyph: (cfg.accent || 'blue') === a.id ? 'check' : '',
         act: function () { setAccent(a.id); },
       });
     });
@@ -1684,7 +1724,7 @@
       if (!r) return;
       windowMenu.push({
         label: appTitle(r.app) + (r.hidden ? '（已隐藏）' : r.minimized ? '（已最小化）' : ''),
-        glyph: id === activeId ? '●' : '',
+        glyph: id === activeId ? 'dot' : '',
         act: (function (wid) {
           return function () {
             var t = windows[wid]; if (!t) return;
@@ -1698,7 +1738,7 @@
     var helpMenu = [
       { label: '快捷键', glyph: '⌘', act: showShortcuts },
       { label: 'RunX OS 文档', glyph: '?', act: function () { window.open(BASE + '/docs', '_blank', 'noopener'); } },
-      { label: '内核状态', glyph: '⚡', act: showKernel },
+      { label: '内核状态', glyph: 'zap', act: showKernel },
       { sep: true },
       { label: '关于 RunX OS', act: showAbout },
     ];
@@ -1785,7 +1825,7 @@
       if (it.head) { m.appendChild(el('div', 'rx-menu-head', it.head)); return; }
       var b = el('button', 'rx-menu-item' + (it.destructive ? ' destructive' : ''));
       b.setAttribute('role', 'menuitem');
-      var g = el('span', 'rx-menu-glyph', it.glyph || '');
+      var g = glyphNode(it.glyph);
       b.appendChild(g);
       b.appendChild(el('span', 'rx-menu-label', it.label));
       if (it.key) b.appendChild(el('span', 'rx-menu-key', it.key));
@@ -1812,11 +1852,11 @@
   /** 桌面右键菜单 */
   function desktopMenuItems() {
     var items = [
-      { label: '新建终端窗口', glyph: '⌨', act: function () { openApp('term'); } },
-      { label: '打开应用…', glyph: '↗', key: '⌘O', act: openLauncher },
-      { label: '开始菜单', glyph: '⊞', key: '⌘␣', act: openStartMenu },
+      { label: '新建终端窗口', glyph: 'terminal', act: function () { openApp('term'); } },
+      { label: '打开应用…', glyph: 'external', key: '⌘O', act: openLauncher },
+      { label: '开始菜单', glyph: 'app', key: '⌘␣', act: openStartMenu },
       { sep: true },
-      { label: '整理图标', glyph: '▦', act: tidyIcons },
+      { label: '整理图标', glyph: 'grid', act: tidyIcons },
       { label: '显示全部窗口', act: showAll },
       { sep: true },
       { head: '壁纸' },
@@ -1825,7 +1865,7 @@
     var curId = (!cur || cur.type === 'builtin') ? ((cur && cur.id) || 'aurora') : null;
     ((cfg && cfg.meta && cfg.meta.wallpapers) || []).forEach(function (w) {
       items.push({
-        label: w.label, glyph: curId === w.id ? '✓' : '',
+        label: w.label, glyph: curId === w.id ? 'check' : '',
         act: function () { setWallpaper({ type: 'builtin', id: w.id }); },
       });
     });
@@ -1835,13 +1875,13 @@
     ((cfg && cfg.meta && cfg.meta.display_presets) || []).forEach(function (p) {
       var on = ((cfg.display && cfg.display.preset) || 'auto') === p.id;
       items.push({
-        label: p.label, glyph: on ? '✓' : '',
+        label: p.label, glyph: on ? 'check' : '',
         act: function () { setDisplay({ preset: p.id, scale: p.scale || 'fit' }); },
       });
     });
     items.push(
       { sep: true },
-      { label: '桌面设置…', glyph: '⚙', key: '⌘,', act: openSettings });
+      { label: '桌面设置…', glyph: 'settings', key: '⌘,', act: openSettings });
     return items;
   }
   function iconMenuItems(ic, app) {
@@ -2164,7 +2204,7 @@
           img.src = url;
           img.style.cssText = 'width:26px;height:26px;border-radius:7px;object-fit:cover';
           row.appendChild(img);
-        } else row.appendChild(el('div', null, '📦'));
+        } else { var _ld = el('div'); _ld.style.cssText = 'width:26px;height:26px;border-radius:7px;display:grid;place-items:center'; _ld.appendChild(svgIcon(ICON.package)); row.appendChild(_ld); }
         var info = el('div');
         info.style.cssText = 'flex:1;min-width:0';
         info.appendChild(el('div', 'body', appTitle(a)));
@@ -2496,7 +2536,7 @@
           img.src = url;
           img.style.cssText = 'width:22px;height:22px;border-radius:6px;object-fit:cover';
           b.appendChild(img);
-        } else b.appendChild(el('span', 'rx-menu-glyph', '📦'));
+        } else b.appendChild(glyphNode('package'));
         b.appendChild(el('span', 'rx-menu-label', appTitle(a)));
         b.appendChild(el('span', 'rx-menu-key', isRunning(a) ? '运行中' : '已停止'));
         b.addEventListener('click', function () { close(); openApp(a.name); });
@@ -2760,9 +2800,9 @@
     // ── 脚：设置 / 关于 / 退出 ──
     var foot = el('div', 'rx-start-foot');
     [
-      { label: '设置', glyph: '⚙', act: function () { closeStartMenu(); openSettings(); } },
-      { label: '关于', glyph: 'ⓘ', act: function () { closeStartMenu(); showAbout(); } },
-      { label: '退出桌面', glyph: '⏻', act: function () {
+      { label: '设置', glyph: 'settings', act: function () { closeStartMenu(); openSettings(); } },
+      { label: '关于', glyph: 'info', act: function () { closeStartMenu(); showAbout(); } },
+      { label: '退出桌面', glyph: 'power', act: function () {
           closeStartMenu();
           confirmAction('退出桌面', '桌面外壳会从页面上移除（内核继续运行）。按 F5 即可重新进入。', function () {
             root.remove(); location.reload();
@@ -2771,7 +2811,7 @@
     ].forEach(function (it) {
       var b = el('button', 'rx-menu-item');
       b.setAttribute('role', 'menuitem');
-      b.appendChild(el('span', 'rx-menu-glyph', it.glyph));
+      b.appendChild(glyphNode(it.glyph));
       b.appendChild(el('span', 'rx-menu-label', it.label));
       b.addEventListener('click', function (e) { e.stopPropagation(); it.act(); });
       foot.appendChild(b);
@@ -2799,11 +2839,11 @@
           var img = el('img', 'rx-start-ico');
           img.src = url; img.alt = ''; img.draggable = false;
           img.addEventListener('error', function () {
-            if (img.parentNode) img.parentNode.replaceChild(el('span', 'rx-start-ico', '📦'), img);
+            if (img.parentNode) img.parentNode.replaceChild(iconSpan('package', 'rx-start-ico', 18), img);
           });
           b.appendChild(img);
         } else {
-          b.appendChild(el('span', 'rx-start-ico', '📦'));
+          b.appendChild(iconSpan('package', 'rx-start-ico', 18));
         }
 
         var meta = el('div', 'rx-start-meta');
