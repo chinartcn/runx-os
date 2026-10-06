@@ -83,27 +83,33 @@
   pointer-events: none;
 }
 
-/* 品牌标记 */
+/* 品牌标记 = 开始菜单入口（点 RunX logo 打开开始菜单） */
 #runx-desktop .rx-brand {
   display: flex;
   align-items: center;
   gap: 6px;
   height: 26px;
   padding: 0 8px 0 6px;
+  border: none;
   border-radius: var(--radius-field);
+  background: transparent;
   cursor: default;
   color: var(--label-primary);
+  transition: background var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out);
 }
+#runx-desktop .rx-brand:hover { background: var(--surface-hover); }
+#runx-desktop .rx-brand:active { background: var(--surface-active); transform: scale(0.97); }
+#runx-desktop .rx-brand:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3.5px var(--accent-ring);
+}
+#runx-desktop .rx-brand[aria-expanded="true"] { background: var(--accent-soft); }
 #runx-desktop .rx-brand-mark {
-  width: 17px; height: 17px;
-  border-radius: 5px;
-  background: linear-gradient(145deg, var(--accent) 0%, #7c5cff 100%);
-  box-shadow: 0 1px 3px color-mix(in srgb, var(--accent) 46%, transparent);
+  width: 19px; height: 19px;
   display: grid; place-items: center;
-  color: #fff;
-  font-size: 10px; font-weight: 700; line-height: 1;
-  letter-spacing: 0;
+  filter: drop-shadow(0 1px 2px color-mix(in srgb, var(--accent) 44%, transparent));
 }
+#runx-desktop .rx-brand-mark svg { width: 19px; height: 19px; display: block; border-radius: 5px; }
 #runx-desktop .rx-brand-name {
   font: var(--font-toolbar);
   font-weight: 650;
@@ -1117,33 +1123,6 @@
     max-height: calc(100% - var(--navbar-h) - var(--safe-top) - var(--dock-h) - var(--safe-bottom) - 16px);
   }
 }
-
-/* ═══════════════════════════════════════════════════════════════════════
- * 开始按钮（菜单栏最左侧，品牌名右侧）
- * ═══════════════════════════════════════════════════════════════════════ */
-#runx-desktop .rx-start-btn {
-  width: 26px; height: 26px;
-  flex: none;
-  display: grid; place-items: center;
-  border: none;
-  border-radius: var(--radius-field);
-  background: transparent;
-  color: var(--label-primary);
-  cursor: default;
-  padding: 0;
-  transition: background var(--dur-fast) var(--ease-out);
-}
-#runx-desktop .rx-start-btn:hover { background: var(--surface-hover); }
-#runx-desktop .rx-start-btn:active { background: var(--surface-active); transform: scale(0.95); }
-#runx-desktop .rx-start-btn:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 3.5px var(--accent-ring);
-}
-#runx-desktop .rx-start-btn[aria-expanded="true"] {
-  background: var(--accent-soft);
-  color: var(--accent);
-}
-#runx-desktop .rx-start-btn svg { width: 15px; height: 15px; }
 
 /* ═══════════════════════════════════════════════════════════════════════
  * 设置面板里的外观控件
