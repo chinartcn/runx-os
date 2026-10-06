@@ -426,7 +426,8 @@ module.exports = {
         version: pkgVersion,
         // 客户端能力位：UI 层据此决定是否渲染扩展面板（现在只有基础外壳）
         capabilities: ['windows.drag', 'windows.resize', 'windows.fullscreen', 'windows.persist',
-          'menubar', 'toolbar', 'startmenu', 'longpress', 'accent', 'display', 'windowdefaults'],
+          'menubar', 'toolbar', 'startmenu', 'longpress', 'accent', 'display', 'windowdefaults',
+          'mobile', 'safearea', 'backguard'],
         // 外观与显示的枚举值由服务端下发：客户端不硬编码，
         // 以后加一个壁纸/强调色只改服务端一处。
         accents: Object.keys(ACCENTS).map((k) => ({ id: k, label: ACCENTS[k].label })),
