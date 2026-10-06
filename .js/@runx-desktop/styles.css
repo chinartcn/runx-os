@@ -926,9 +926,10 @@
  * 虚拟显示器分辨率
  *
  * 实现方式：#runx-desktop 内部的 .rx-vscreen 是「逻辑桌面」，尺寸等于
- * 虚拟分辨率，用 transform: scale() 等比缩放到实际视口并居中。
+ * 虚拟分辨率，用 transform: scale() **铺满（cover）** 到实际视口并居中。
  * 这样窗口坐标系统一 —— 手机上打开 1280×800 的桌面，窗口摆位与桌面端一致，
- * 而不是各排一套。缩放后的空白区域用 letterbox 黑边。
+ * 而不是各排一套。取较大缩放比保证桌面填满视口、四周不留白（宁可裁掉
+ * 边缘也不能露出宿主页面），溢出的部分由 overflow:hidden 裁掉。
  * ═══════════════════════════════════════════════════════════════════════ */
 #runx-desktop .rx-vscreen {
   position: absolute;
@@ -938,12 +939,9 @@
   /* 无缩放（自适应）时就是普通全屏容器 */
 }
 #runx-desktop .rx-vscreen[data-scaled="1"] {
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5), 0 20px 60px -20px rgba(0, 0, 0, 0.7);
-  border-radius: 2px;
+  /* 铺满模式下桌面比视口大、边缘被裁，加内外阴影强调「这是一个显示器」 */
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.4);
 }
-/* 逻辑分辨率与视口不一致时的 letterbox 底色 */
-#runx-desktop[data-letterbox="1"] { background-color: #08080b; }
-#runx-desktop[data-letterbox="1"][data-theme="light"] { background-color: #d8d8dd; }
 
 /* 分辨率徽标：缩放过（≠1）时在右下角显示，避免用户以为桌面被拉伸了 */
 #runx-desktop .rx-vscreen-badge {
