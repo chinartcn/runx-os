@@ -383,11 +383,19 @@
    *  window.resize 不触发，visualViewport 才会。
    *  注意：两者取**较小**的一边。手机开「桌面版网站」时布局视口会被撑到
    *  ~980px，而手指能触及的只有 visualViewport 那 ~390px —— 按布局视口
-   *  排版会让桌面右半边跑到屏幕外。 */
+   *  排版会让桌面右半边跑到屏幕外。
+   *
+   *  ⚠ 布局视口基准必须用 window.innerWidth/innerHeight，**不能**用
+   *  root.clientWidth/clientHeight：applyViewportFrame() 会把算出的尺寸写进
+   *  root.style.height/width，于是 root.clientHeight 读回来的是「自己上一次写
+   *  进去的值」，形成自我引用。键盘弹起时 vv.height 变小 → 写进 root.style.height
+   *  → 键盘收起后 vv.height 恢复，但 Math.min(vv.height, root.clientHeight) 仍被
+   *  那个旧的小值钳住，桌面永远缩不回满屏（下端露出宿主背景）。
+   *  innerHeight 是布局视口本身，不受我们设置的元素样式影响，可安全作基准。 */
   function physViewport() {
     var vv = window.visualViewport;
-    var lw = root.clientWidth || window.innerWidth;
-    var lh = root.clientHeight || window.innerHeight;
+    var lw = window.innerWidth;
+    var lh = window.innerHeight;
     if (vv && vv.width && vv.height) {
       return { w: Math.min(vv.width, lw), h: Math.min(vv.height, lh) };
     }
@@ -401,8 +409,15 @@
    *      844×390 的横屏上，铺满缩放会放大 2 倍并把导航条/Dock 裁到视口外。
    * 配置本身不动（回到桌面端仍然生效），只在窄形态下临时按物理视口排布；
    * 想看「手机分辨率桌面」可显式选比例合适的窄预设，不会被回退。
+   *
+   * ⚠ 只回退「逻辑尺寸」，**不回退用户显式选的固定缩放倍数**。
+   *   以前这里一旦回退，displayScale() 就直接 return 1，于是手机上点
+   *   100% / 75% / 125% 全被吃掉（默认预设 w=1280>680 必然命中 a），
+   *   按钮点了等于没按。固定缩放是用户的显式选择，不该被自动策略覆盖 ——
+   *   它只决定「逻辑桌面按预设尺寸布局」，缩放倍数照用户设的执行。
    */
   function mobileAutoOverride() {
+    if (fixedZoom()) return false;      // 用户锁定了缩放倍数 → 尊重用户选择
     if (!narrow()) return false;
     var d = cfg && cfg.display;
     if (!d || !d.preset || d.preset === 'auto' || !(d.w > 0 && d.h > 0)) return false;
@@ -417,6 +432,13 @@
     }
     return false;
   }
+  /** 是否用户显式锁定了缩放倍数（scale 为数字而非 'fit'/空） */
+  function fixedZoom() {
+    var d = cfg && cfg.display;
+    if (!d || d.scale === 'fit' || d.scale == null) return false;
+    var n = Number(d.scale);
+    return isFinite(n) && n > 0 && Math.abs(n - 1) > 0.001;
+  }
   /** 逻辑桌面尺寸：设了虚拟分辨率就用它，否则等于物理视口（自适应） */
   function viewport() {
     var d = cfg && cfg.display;
@@ -429,6 +451,12 @@
   /** 当前缩放比：逻辑 → 物理 */
   function displayScale() {
     var d = cfg && cfg.display;
+    // 固定缩放：用户显式锁定的倍数优先，不受「手机自适应回退」影响 ——
+    // 它只决定逻辑尺寸用不用预设，不决定缩放倍数。
+    if (fixedZoom()) {
+      var n = Number(d.scale);
+      return isFinite(n) && n > 0 ? n : 1;
+    }
     if (mobileAutoOverride()) return 1;
     if (!d || !d.preset || d.preset === 'auto' || !(d.w > 0 && d.h > 0)) return 1;
     if (d.scale === 'fit' || d.scale == null) {
@@ -439,8 +467,8 @@
       var s = Math.max(pv.w / d.w, pv.h / d.h);
       return isFinite(s) && s > 0 ? s : 1;
     }
-    var n = Number(d.scale);
-    return isFinite(n) && n > 0 ? n : 1;
+    var n2 = Number(d.scale);
+    return isFinite(n2) && n2 > 0 ? n2 : 1;
   }
   /** 屏幕坐标 → 逻辑桌面坐标 */
   function toLogical(x, y) {
@@ -1014,27 +1042,54 @@
    *   2) 设备屏宽 ≤680（真机「桌面版网站」时 screen.width 仍是物理宽）
    *   3) 无 hover 能力（(hover:none)）—— 手机/平板的本质特征，触屏笔记本
    *      有 (hover:hover)，不会被误判；配合宽视口即可锁定「桌面版网站」模式
-   *   4) 视口被缩放（visualViewport.scale > 1）
+   *   4) 视口被缩放（visualViewport.scale > 1）—— **带滞回**，见下
+   *
+   * ⚠ 第 ④ 条必须做「滞回（hysteresis）」：vv.scale 会被键盘弹起、地址栏
+   *   收展、双击缩放等**瞬时**改变。判据若直接读实时值，narrow() 就会在
+   *   true/false 之间反复横跳 —— 表现就是「点个终端，桌面放大又缩小」。
+   *   所以这里让第 ④ 条一旦成立就**保持**，直到 scale 明确回落（<1.02）
+   *   才释放。
+   *
+   * 缓存：结论只跟「可视区宽 + 设备屏宽」有关，这两个没变就复用，
+   * 避免同一形态被反复重算。cfg 变化（切分辨率预设）时用
+   * invalidateNarrow() 显式失效 —— 否则缓存键不变会复用旧结论。
    */
   function noHover() {
     try { return window.matchMedia && window.matchMedia('(hover: none)').matches; }
     catch (e) { return false; }
   }
+  var _narrowCache = null;      // { key, val }
+  var _scaledSticky = false;    // 第 ④ 条的滞回状态
+  function invalidateNarrow() { _narrowCache = null; _scaledSticky = false; }
   function narrow() {
     var w = (root.clientWidth || window.innerWidth || 0);
     var dw = deviceWidth();
-    if (w && w <= 680) return true;                          // ① 可视区窄
-    if (dw && dw <= 680) return true;                        // ② 设备屏窄
-    // ③ 无 hover + 粗指针（真手机/平板；触屏笔记本是 (hover:hover)，排除）
-    //    且屏幕物理宽不宽 —— 宽视口只可能来自「桌面版网站」，按移动排版
-    var touchOnly = noHover() &&
-      window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
-    if (touchOnly && dw && dw <= 900) return true;
-    if (touchOnly) {
-      var vv = window.visualViewport;
-      if (vv && vv.scale > 1.05) return true;                // ④ 视口被缩放
+
+    // 缓存键：只跟「宽 + 设备屏宽」有关 —— 这两个才是形态的实质变量。
+    // vv.scale 不进缓存键，避免抖动把缓存打穿。
+    var key = w + '|' + dw;
+    if (_narrowCache && _narrowCache.key === key) return _narrowCache.val;
+
+    var val;
+    if (w && w <= 680) val = true;                           // ① 可视区窄
+    else if (dw && dw <= 680) val = true;                    // ② 设备屏窄
+    else {
+      // ③ 无 hover + 粗指针（真手机/平板；触屏笔记本是 (hover:hover)，排除）
+      var touchOnly = noHover() &&
+        window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
+      if (touchOnly && dw && dw <= 900) val = true;
+      else if (touchOnly) {
+        // ④ 视口被缩放：滞回处理 —— 进入阈值 1.05，退出阈值 1.02
+        var vv = window.visualViewport;
+        var sc = vv && vv.scale ? vv.scale : 1;
+        if (sc > 1.05) _scaledSticky = true;
+        else if (sc < 1.02) _scaledSticky = false;
+        val = _scaledSticky;
+      } else val = false;
     }
-    return false;
+
+    _narrowCache = { key: key, val: val };
+    return val;
   }
 
   /**
@@ -2702,7 +2757,11 @@
   }
 
   function reloadDesktop() {
-    return api('/desktop').then(function (d) { cfg = d; render(); });
+    return api('/desktop').then(function (d) {
+      cfg = d;
+      invalidateNarrow();   // 分辨率预设变了，narrow() 的缓存结论必须重算
+      render();
+    });
   }
   function refreshApps() {
     return api('/apps').then(function (d) {
