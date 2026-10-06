@@ -1,12 +1,23 @@
 {
   "name": "navext",
-  "version": "2.8.0",
+  "version": "2.8.2",
   "description": "零依赖的本地文档导航服务器",
   "license": "MIT",
-  "bin": { "navext": "cli.js" },
-  "engines": { "node": ">=14" },
+  "bin": {
+    "navext": "cli.js"
+  },
+  "engines": {
+    "node": ">=14"
+  },
   "files": [
-    "server.js", ".navext.client.js", "build.js", "cli.js", "vm.js",
-    "README.md", "NavExt.md", "cli.md", "LICENSE"
+    "server.js",
+    ".navext.client.js",
+    "build.js",
+    "cli.js",
+    "vm.js",
+    "README.md",
+    "NavExt.md",
+    "cli.md",
+    "LICENSE"
   ]
 }
