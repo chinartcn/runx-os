@@ -806,3 +806,460 @@
   #runx-desktop .rx-win-dots { gap: 9px; }
   #runx-desktop .rx-dot { width: 14px; height: 14px; }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * 强调色（§2.2 Accent Color）
+ *
+ * 只覆盖 --accent 系列，不动语义红/绿/黄 —— 语义色表达含义，
+ * 强调色表达「可交互/已选中」，两者职责不同，不能混。
+ * 浅色与深色各一套值（同一个色相在两种底色上需要的明度不同）。
+ * ═══════════════════════════════════════════════════════════════════════ */
+#runx-desktop[data-accent="blue"]   { --accent: #0a6cff; --accent-hover: #2b81ff; --accent-press: #0a5ad8; }
+#runx-desktop[data-accent="purple"] { --accent: #7c3aed; --accent-hover: #9061f9; --accent-press: #6d28d9; }
+#runx-desktop[data-accent="pink"]   { --accent: #db2777; --accent-hover: #ec4899; --accent-press: #be185d; }
+#runx-desktop[data-accent="red"]    { --accent: #d70015; --accent-hover: #ef3b47; --accent-press: #b00011; }
+#runx-desktop[data-accent="orange"] { --accent: #c2410c; --accent-hover: #ea580c; --accent-press: #9a3412; }
+#runx-desktop[data-accent="yellow"] { --accent: #a16207; --accent-hover: #ca8a04; --accent-press: #854d0e; }
+#runx-desktop[data-accent="green"]  { --accent: #15803d; --accent-hover: #16a34a; --accent-press: #166534; }
+#runx-desktop[data-accent="graphite"] { --accent: #5b6470; --accent-hover: #6b7480; --accent-press: #47505c; }
+
+#runx-desktop[data-theme="dark"][data-accent="blue"]   { --accent: #4a9eff; --accent-hover: #6bb0ff; --accent-press: #2f80e0; }
+#runx-desktop[data-theme="dark"][data-accent="purple"] { --accent: #a78bfa; --accent-hover: #bfa5ff; --accent-press: #8b6ce8; }
+#runx-desktop[data-theme="dark"][data-accent="pink"]   { --accent: #f472b6; --accent-hover: #ff8fc7; --accent-press: #db5a99; }
+#runx-desktop[data-theme="dark"][data-accent="red"]    { --accent: #ff6b63; --accent-hover: #ff8a83; --accent-press: #e04a42; }
+#runx-desktop[data-theme="dark"][data-accent="orange"] { --accent: #fb923c; --accent-hover: #fdad63; --accent-press: #e07a28; }
+#runx-desktop[data-theme="dark"][data-accent="yellow"] { --accent: #fbbf24; --accent-hover: #fcd34d; --accent-press: #e0a412; }
+#runx-desktop[data-theme="dark"][data-accent="green"]  { --accent: #4ade80; --accent-hover: #6ee79a; --accent-press: #34b964; }
+#runx-desktop[data-theme="dark"][data-accent="graphite"] { --accent: #9aa4b2; --accent-hover: #aeb7c4; --accent-press: #7b8694; }
+
+/* 强调色的 soft / ring 都从 --accent 派生，换色后自动跟着变，不必逐个重写 */
+#runx-desktop {
+  --accent-soft: color-mix(in srgb, var(--accent) 14%, transparent);
+  --accent-ring: color-mix(in srgb, var(--accent) 34%, transparent);
+}
+#runx-desktop[data-theme="dark"] {
+  --accent-soft: color-mix(in srgb, var(--accent) 22%, transparent);
+  --accent-ring: color-mix(in srgb, var(--accent) 42%, transparent);
+}
+
+/* ── 内置壁纸：全部是零请求的 CSS 渐变 ── */
+#runx-desktop[data-wallpaper="builtin"][data-wallpaper-id="aurora"] {
+  background-image:
+    radial-gradient(120% 90% at 12% 4%,  rgba(124, 92, 255, 0.55) 0%, transparent 58%),
+    radial-gradient(100% 80% at 92% 12%, rgba(0, 178, 255, 0.42) 0%, transparent 55%),
+    radial-gradient(120% 100% at 68% 100%, rgba(255, 92, 168, 0.34) 0%, transparent 62%),
+    linear-gradient(160deg, #14102b 0%, #1b2340 46%, #241b38 100%);
+}
+#runx-desktop[data-wallpaper="builtin"][data-wallpaper-id="sunset"] {
+  background-image:
+    radial-gradient(110% 80% at 78% 8%,  rgba(255, 176, 66, 0.60) 0%, transparent 56%),
+    radial-gradient(120% 90% at 18% 92%, rgba(233, 64, 118, 0.52) 0%, transparent 60%),
+    linear-gradient(165deg, #2b1230 0%, #5c1f3d 50%, #a8402f 100%);
+}
+#runx-desktop[data-wallpaper="builtin"][data-wallpaper-id="ocean"] {
+  background-image:
+    radial-gradient(120% 90% at 8% 10%,  rgba(0, 214, 200, 0.42) 0%, transparent 56%),
+    radial-gradient(110% 90% at 88% 88%, rgba(38, 108, 255, 0.48) 0%, transparent 58%),
+    linear-gradient(160deg, #04141f 0%, #08304a 52%, #0a4a63 100%);
+}
+#runx-desktop[data-wallpaper="builtin"][data-wallpaper-id="forest"] {
+  background-image:
+    radial-gradient(110% 80% at 16% 6%,  rgba(140, 220, 96, 0.38) 0%, transparent 54%),
+    radial-gradient(120% 90% at 84% 92%, rgba(20, 130, 96, 0.46) 0%, transparent 58%),
+    linear-gradient(162deg, #0b1a12 0%, #173a26 54%, #1f4a30 100%);
+}
+#runx-desktop[data-wallpaper="builtin"][data-wallpaper-id="mono"] {
+  background-image:
+    radial-gradient(120% 90% at 20% 0%,  rgba(255, 255, 255, 0.10) 0%, transparent 60%),
+    linear-gradient(162deg, #17181c 0%, #24262c 52%, #303339 100%);
+}
+#runx-desktop[data-wallpaper="builtin"][data-wallpaper-id="paper"] {
+  background-image:
+    radial-gradient(120% 90% at 12% 6%,  rgba(255, 236, 196, 0.65) 0%, transparent 58%),
+    linear-gradient(160deg, #efe6d4 0%, #e2d6c0 50%, #d3c5ad 100%);
+  --icon-label: #211d18;
+  --icon-label-shadow: 0 1px 2px rgba(255, 255, 255, 0.7);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * 虚拟显示器分辨率
+ *
+ * 实现方式：#runx-desktop 内部的 .rx-vscreen 是「逻辑桌面」，尺寸等于
+ * 虚拟分辨率，用 transform: scale() 等比缩放到实际视口并居中。
+ * 这样窗口坐标系统一 —— 手机上打开 1280×800 的桌面，窗口摆位与桌面端一致，
+ * 而不是各排一套。缩放后的空白区域用 letterbox 黑边。
+ * ═══════════════════════════════════════════════════════════════════════ */
+#runx-desktop .rx-vscreen {
+  position: absolute;
+  top: 0; left: 0;
+  transform-origin: 0 0;
+  overflow: hidden;
+  /* 无缩放（自适应）时就是普通全屏容器 */
+}
+#runx-desktop .rx-vscreen[data-scaled="1"] {
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5), 0 20px 60px -20px rgba(0, 0, 0, 0.7);
+  border-radius: 2px;
+}
+/* 逻辑分辨率与视口不一致时的 letterbox 底色 */
+#runx-desktop[data-letterbox="1"] { background-color: #08080b; }
+#runx-desktop[data-letterbox="1"][data-theme="light"] { background-color: #d8d8dd; }
+
+/* 分辨率徽标：缩放过（≠1）时在右下角显示，避免用户以为桌面被拉伸了 */
+#runx-desktop .rx-vscreen-badge {
+  position: absolute;
+  right: 8px; bottom: calc(var(--dock-h) + 14px);
+  padding: 3px 8px;
+  border-radius: var(--radius-pill);
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font: var(--font-caption);
+  font-variant-numeric: tabular-nums;
+  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+  z-index: 400;
+}
+#runx-desktop .rx-vscreen-badge[data-show="1"] { opacity: 1; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * 开始菜单
+ *
+ * 定位在左侧、紧贴导航条下方，高度铺到 Dock 之上。内容分三块：
+ * 搜索 / 应用列表（可滚动）/ 底部电源与设置。
+ * ═══════════════════════════════════════════════════════════════════════ */
+#runx-desktop .rx-start {
+  position: absolute;
+  left: 8px;
+  top: calc(var(--navbar-h) + 6px);
+  width: min(340px, 92vw);
+  max-height: min(560px, calc(100% - var(--navbar-h) - var(--dock-h) - 24px));
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius-panel);
+  border: 0.5px solid var(--hairline-strong);
+  box-shadow: var(--shadow-menu);
+  overflow: hidden;
+  z-index: 500;
+  /* 同心圆角：外层面板半径 - 内边距 */
+  --outer-radius: var(--radius-panel);
+  --padding: 8px;
+  transform-origin: 0 0;
+  /* 开始菜单是**最大**的一块弹出面板，底下可能压着深色终端 ——
+     只靠 .rx-material-thick 的毛玻璃会让文字透出来糊成一片。
+     这里单独把底色加到接近不透明：可读性优先于通透感。 */
+  background: color-mix(in srgb, var(--surface-card) 97%, var(--label-primary) 3%);
+}
+#runx-desktop .rx-start[data-anim="in"] {
+  animation: rx-start-in var(--dur-med) var(--ease-out);
+}
+@keyframes rx-start-in {
+  from { opacity: 0; transform: scale(0.97) translateY(-6px); }
+  to   { opacity: 1; transform: none; }
+}
+#runx-desktop .rx-start-head {
+  padding: 10px 10px 8px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex: none;
+}
+#runx-desktop .rx-start-search {
+  flex: 1;
+  height: 32px;
+  border-radius: calc(var(--radius-panel) - 8px);
+  border: 0.5px solid var(--stroke-control);
+  background: var(--surface-sunken);
+  color: var(--label-primary);
+  font: var(--font-body);
+  padding: 0 10px;
+  box-sizing: border-box;
+  outline: none;
+  min-width: 0;
+}
+#runx-desktop .rx-start-search:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+#runx-desktop .rx-start-section {
+  padding: 0 10px;
+  flex: none;
+}
+#runx-desktop .rx-start-list {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px 8px 8px;
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  gap: 2px;
+  align-content: start;
+}
+#runx-desktop .rx-start-app {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 42px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: calc(var(--radius-panel) - 8px);
+  background: transparent;
+  color: var(--label-primary);
+  font: var(--font-body);
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  box-sizing: border-box;
+}
+#runx-desktop .rx-start-app:hover,
+#runx-desktop .rx-start-app:focus-visible {
+  background: var(--surface-hover);
+  outline: none;
+}
+#runx-desktop .rx-start-app[data-active="1"] { background: var(--surface-active); }
+#runx-desktop .rx-start-app[aria-selected="true"] { background: var(--accent-soft); }
+#runx-desktop .rx-start-app .rx-start-ico {
+  width: 26px; height: 26px;
+  border-radius: 7px;
+  object-fit: cover;
+  flex: none;
+  display: grid;
+  place-items: center;
+  font-size: 20px;
+}
+#runx-desktop .rx-start-app .rx-start-meta { min-width: 0; flex: 1; }
+#runx-desktop .rx-start-app .rx-start-name {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#runx-desktop .rx-start-app .rx-start-sub {
+  display: block;
+  color: var(--label-tertiary);
+  font: var(--font-caption);
+}
+#runx-desktop .rx-start-state {
+  flex: none;
+  font: var(--font-caption);
+  color: var(--label-tertiary);
+}
+#runx-desktop .rx-start-state[data-on="1"] { color: var(--semantic-green); }
+#runx-desktop .rx-start-foot {
+  flex: none;
+  border-top: 0.5px solid var(--hairline);
+  padding: 6px 8px;
+  display: flex;
+  gap: 2px;
+  align-items: center;
+}
+#runx-desktop .rx-start-foot .rx-menu-item { height: 34px; flex: 1; }
+#runx-desktop .rx-start-empty {
+  padding: 18px 12px;
+  color: var(--label-tertiary);
+  font: var(--font-caption);
+  text-align: center;
+}
+
+/* 开始菜单在窄屏上铺得更开一点 */
+@media (max-width: 680px) {
+  #runx-desktop .rx-start {
+    left: 6px; right: 6px;
+    width: auto;
+    max-height: calc(100% - var(--navbar-h) - var(--dock-h) - 18px);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * 开始按钮（菜单栏最左侧，品牌名右侧）
+ * ═══════════════════════════════════════════════════════════════════════ */
+#runx-desktop .rx-start-btn {
+  width: 26px; height: 26px;
+  flex: none;
+  display: grid; place-items: center;
+  border: none;
+  border-radius: var(--radius-field);
+  background: transparent;
+  color: var(--label-primary);
+  cursor: default;
+  padding: 0;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+#runx-desktop .rx-start-btn:hover { background: var(--surface-hover); }
+#runx-desktop .rx-start-btn:active { background: var(--surface-active); transform: scale(0.95); }
+#runx-desktop .rx-start-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3.5px var(--accent-ring);
+}
+#runx-desktop .rx-start-btn[aria-expanded="true"] {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+#runx-desktop .rx-start-btn svg { width: 15px; height: 15px; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * 设置面板里的外观控件
+ *
+ * 强调色色块：颜色本身就用 [data-accent] 上的 --accent 变量当背景 ——
+ * 不硬编码十六进制，调色时只改一处（styles.css 顶部的 [data-accent] 块）。
+ * 深色模式下同一个 id 的 --accent 是另一个值，色块因此自动变成深色变体。
+ * ═══════════════════════════════════════════════════════════════════════ */
+#runx-desktop .rx-swatches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+#runx-desktop .rx-swatch {
+  width: 30px; height: 30px;
+  padding: 0;
+  border-radius: 50%;
+  border: 0.5px solid var(--hairline-strong);
+  background: var(--accent);
+  cursor: pointer;
+  position: relative;
+  transition: transform var(--dur-fast) var(--ease-out);
+}
+/* 每个色块用自己那一档的强调色，而不是当前全局 --accent */
+#runx-desktop .rx-swatch[data-accent="blue"]     { background: #0a6cff; }
+#runx-desktop .rx-swatch[data-accent="purple"]   { background: #7c3aed; }
+#runx-desktop .rx-swatch[data-accent="pink"]     { background: #db2777; }
+#runx-desktop .rx-swatch[data-accent="red"]      { background: #d70015; }
+#runx-desktop .rx-swatch[data-accent="orange"]   { background: #c2410c; }
+#runx-desktop .rx-swatch[data-accent="yellow"]   { background: #a16207; }
+#runx-desktop .rx-swatch[data-accent="green"]    { background: #15803d; }
+#runx-desktop .rx-swatch[data-accent="graphite"] { background: #5b6470; }
+#runx-desktop[data-theme="dark"] .rx-swatch[data-accent="blue"]     { background: #4a9eff; }
+#runx-desktop[data-theme="dark"] .rx-swatch[data-accent="purple"]   { background: #a78bfa; }
+#runx-desktop[data-theme="dark"] .rx-swatch[data-accent="pink"]     { background: #f472b6; }
+#runx-desktop[data-theme="dark"] .rx-swatch[data-accent="red"]      { background: #ff6b63; }
+#runx-desktop[data-theme="dark"] .rx-swatch[data-accent="orange"]   { background: #fb923c; }
+#runx-desktop[data-theme="dark"] .rx-swatch[data-accent="yellow"]   { background: #fbbf24; }
+#runx-desktop[data-theme="dark"] .rx-swatch[data-accent="green"]    { background: #4ade80; }
+#runx-desktop[data-theme="dark"] .rx-swatch[data-accent="graphite"] { background: #9aa4b2; }
+#runx-desktop .rx-swatch:hover { transform: scale(1.08); }
+#runx-desktop .rx-swatch:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3.5px var(--accent-ring);
+}
+/* 选中态：白色对勾 + 一圈外扩描边（色块本身就是颜色，不能靠颜色表达选中） */
+#runx-desktop .rx-swatch[aria-checked="true"] {
+  box-shadow: 0 0 0 2px var(--surface-chrome), 0 0 0 4px var(--label-primary);
+}
+#runx-desktop .rx-swatch[aria-checked="true"]::after {
+  content: '';
+  position: absolute;
+  left: 50%; top: 47%;
+  width: 5px; height: 9px;
+  margin: -5px 0 0 -2.5px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+/* 壁纸缩略图：六宫格，缩略图直接复用桌面那套渐变（同一组 id） */
+#runx-desktop .rx-wall-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+#runx-desktop .rx-wall {
+  height: 46px;
+  border-radius: calc(var(--radius-panel) - 8px);
+  border: 0.5px solid var(--hairline-strong);
+  padding: 0;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  display: grid;
+  place-items: end center;
+}
+#runx-desktop .rx-wall[data-wall-id="aurora"] {
+  background: linear-gradient(160deg, #0b1020 0%, #10233f 38%, #1d3b6e 68%, #06283a 100%); }
+#runx-desktop .rx-wall[data-wall-id="sunset"] {
+  background: linear-gradient(160deg, #1b1030 0%, #4a1d4e 40%, #a3395c 72%, #f0805a 100%); }
+#runx-desktop .rx-wall[data-wall-id="ocean"] {
+  background: linear-gradient(160deg, #04121f 0%, #0a3a52 45%, #0e6b7a 78%, #02a3a3 100%); }
+#runx-desktop .rx-wall[data-wall-id="forest"] {
+  background: linear-gradient(160deg, #06140d 0%, #10341f 45%, #1e5b32 78%, #4a8f4a 100%); }
+#runx-desktop .rx-wall[data-wall-id="mono"] {
+  background: linear-gradient(160deg, #0d0d10 0%, #26262c 50%, #3d3d46 100%); }
+#runx-desktop .rx-wall[data-wall-id="paper"] {
+  background: linear-gradient(160deg, #f7f4ec 0%, #efe9dc 55%, #e3d9c7 100%); }
+#runx-desktop .rx-wall-name {
+  font: var(--font-caption);
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.75);
+  padding: 0 0 3px;
+  pointer-events: none;
+}
+#runx-desktop .rx-wall[data-wall-id="paper"] .rx-wall-name {
+  color: #3a3428;
+  text-shadow: 0 1px 2px rgba(255, 255, 255, 0.8);
+}
+#runx-desktop .rx-wall:hover { border-color: var(--label-secondary); }
+#runx-desktop .rx-wall:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3.5px var(--accent-ring);
+}
+#runx-desktop .rx-wall[aria-pressed="true"] {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-ring);
+}
+
+/* 小圆角「芯片」选项（分辨率预设、窗口位置策略） */
+#runx-desktop .rx-chip-wrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+#runx-desktop .rx-chip {
+  height: 26px;
+  padding: 0 11px;
+  border-radius: 999px;
+  border: 0.5px solid var(--stroke-control);
+  background: var(--surface-sunken);
+  color: var(--label-primary);
+  font: var(--font-caption);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+#runx-desktop .rx-chip:hover { background: var(--surface-hover); }
+#runx-desktop .rx-chip:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3.5px var(--accent-ring);
+}
+#runx-desktop .rx-chip[aria-checked="true"] {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* 设置面板里的行布局 */
+#runx-desktop .rx-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+#runx-desktop .rx-field-num {
+  width: 76px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+/* 数字输入框的上下箭头在 26px 高的控件里非常挤，去掉 */
+#runx-desktop .rx-field-num::-webkit-outer-spin-button,
+#runx-desktop .rx-field-num::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+#runx-desktop .rx-field-num { -moz-appearance: textfield; appearance: textfield; }
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * 上下文菜单：现在是挂在宿主 #runx-desktop 上（不是 vscreen），
+ * 因为虚拟分辨率下它不该跟着桌面被缩放 —— 菜单文字在 414px 的逻辑宽度
+ * 缩到手机上会小到看不清，而系统级弹层应该保持设备原生字号。
+ * ═══════════════════════════════════════════════════════════════════════ */
+#runx-desktop .rx-menu-ctx { z-index: 560; }
