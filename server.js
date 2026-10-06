@@ -236,6 +236,10 @@ const PATTERN = Object.freeze({
   metaFile: 'html.json',
   dirMetaKeys: new Set(['@dir', '_dir', '__dir__']),
   configKey: /^[a-zA-Z_][a-zA-Z0-9_-]{0,63}$/,
+  // 扩展 id：以 @ 开头表示「内置 / 核心扩展」，其余与 configKey 同规则。
+  // loadExtensions() 与 validateExtId() 共用此模式，避免出现
+  // 「能加载却不能启停 / 改配置」的不一致。
+  extId: /^@?[a-zA-Z_][a-zA-Z0-9_-]{0,63}$/,
   htmlTag: /[&<>"']/g,
 });
 
@@ -1749,7 +1753,7 @@ function loadExtensions(cfg) {
   const candidates = [];
   for (const entry of entries) {
     const name = entry.id;
-    if (name.includes('/') || name.includes('\\') || name.startsWith('.')) {
+    if (name.includes('/') || name.includes('\\') || name.startsWith('.') || !PATTERN.extId.test(name)) {
       console.warn(`  ⚠  [${ts()}] 扩展名不合法：${name}`);
       continue;
     }
@@ -3426,7 +3430,7 @@ function findExtension(app, id) {
 function validateExtId(id) {
   if (!id) return '缺少 id';
   if (id.includes('/') || id.includes('\\') || id.startsWith('.')) return 'id 不合法';
-  if (!PATTERN.configKey.test(id)) return 'id 不合法';
+  if (!PATTERN.extId.test(id)) return 'id 不合法';
   return null;
 }
 
