@@ -20,6 +20,8 @@
   overflow: hidden;
   z-index: 99999;
   color: var(--label-primary);
+  /* 内联 SVG 图标默认 inline 会带来行内基线空隙，统一改为 block 让居中/对齐稳定 */
+  svg { display: block; }
   background-size: cover;
   background-position: center;
   /* 壁纸换色时不要闪白 */
