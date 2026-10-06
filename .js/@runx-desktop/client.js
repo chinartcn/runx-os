@@ -139,16 +139,35 @@
 
   /* ═══════════════════════════════════════════════════════════════════
    * DOM 骨架
+   *
+   * 层次： #runx-desktop（宿主，铺满物理视口）
+   *          └ .rx-vscreen（逻辑桌面，尺寸＝虚拟分辨率，等比缩放居中）
+   *               ├ .rx-menubar  顶部导航条
+   *               ├ .rx-surface  桌面图标层
+   *               ├ .rx-dock     应用坞
+   *               ├ 弹出层（菜单 / 对话框 / 开始菜单 / toast）
+   *          └ .rx-vscreen-badge（缩放徽标；挂在宿主上，不随桌面缩放）
+   *
+   * 为什么要多一层 vscreen：设了虚拟分辨率（如 1280×800）后，桌面内部一律
+   * 用逻辑坐标，缩放交给 CSS transform。这样窗口摆位与设备无关。
+   * 自适应模式下 vscreen 就等于视口、scale=1，行为与没有这一层完全一致。
    * ═══════════════════════════════════════════════════════════════════ */
   var root = el('div');
   root.id = 'runx-desktop';
   document.body.appendChild(root);
 
+  var vscreen = el('div', 'rx-vscreen');
+  root.appendChild(vscreen);
+
   var menubar = el('div', 'rx-menubar rx-material-thin');
   menubar.setAttribute('role', 'menubar');
   var surface = el('div', 'rx-surface');
-  root.appendChild(menubar);
-  root.appendChild(surface);
+  vscreen.appendChild(menubar);
+  vscreen.appendChild(surface);
+
+  // 分辨率徽标挂在宿主上：它不该跟着桌面一起被缩放，否则小分辨率下看不见
+  var badge = el('div', 'rx-vscreen-badge');
+  root.appendChild(badge);
 
   var brand = el('div', 'rx-brand');
   var brandMark = el('div', 'rx-brand-mark', 'R');
@@ -157,6 +176,18 @@
   brand.appendChild(brandName);
   brand.setAttribute('title', 'RunX OS');
   menubar.appendChild(brand);
+
+  /* 开始按钮：整个系统的应用总入口。放在品牌名右侧、菜单栏之前 ——
+     与「菜单栏是命令总入口」并列，两者职责不同：菜单栏管**当前窗口**，
+     开始菜单管**整个系统**（开应用 / 设置 / 退出）。 */
+  var startBtn = el('button', 'rx-start-btn');
+  startBtn.setAttribute('type', 'button');
+  startBtn.setAttribute('aria-haspopup', 'true');
+  startBtn.setAttribute('aria-expanded', 'false');
+  startBtn.setAttribute('aria-label', '开始菜单');
+  startBtn.setAttribute('title', '开始菜单');
+  startBtn.appendChild(svgIcon(ICON.app));
+  menubar.appendChild(startBtn);
 
   var menuHost = el('div', 'rx-menu-roots');
   menuHost.style.cssText = 'display:flex;align-items:center;gap:2px;min-width:0';
@@ -180,11 +211,11 @@
   statusHost.appendChild(statusClock);
 
   var toast = el('div', 'rx-toast rx-material-thick');
-  root.appendChild(toast);
+  vscreen.appendChild(toast);
 
   var live = el('div', 'rx-sr-only');
   live.setAttribute('aria-live', 'polite');
-  root.appendChild(live);
+  vscreen.appendChild(live);
 
   function announce(msg) { live.textContent = msg; }
   function showToast(msg, ms) {
@@ -234,21 +265,49 @@
   /* ═══════════════════════════════════════════════════════════════════
    * 主题 / 壁纸
    * ═══════════════════════════════════════════════════════════════════ */
+  /**
+   * 主题 = 明暗（data-theme） + 强调色（data-accent）。
+   *
+   * 强调色**不整体染色**（§2.2）：它只喂给 --accent / --accent-hover /
+   * --accent-press 三个令牌，由 CSS 里 `[data-accent="X"]` 的规则接管；
+   * 选中态、焦点环、进度条这些「有意义的强调」的地方自动跟着变，
+   * 而语义色（红=危险 / 绿=正常）不受影响 —— 这是把强调色与语义色分开的理由。
+   */
   function applyTheme() {
     root.setAttribute('data-theme', (cfg && cfg.theme) || 'auto');
+    var accent = (cfg && cfg.accent) || 'blue';
+    // 只认服务端下发的枚举；脏数据（手改 desktop.json）回落默认色，
+    // 否则会写出一个没有对应 CSS 规则的属性值 → 强调色静默失效。
+    var known = (cfg && cfg.meta && cfg.meta.accents) || [];
+    if (known.length && !known.some(function (a) { return a.id === accent; })) accent = 'blue';
+    root.setAttribute('data-accent', accent);
   }
+
+  /**
+   * 壁纸：内置（data-wallpaper-id 选渐变）/ 图片文件 / 任意图片 URL。
+   *
+   * 内置壁纸走 CSS 变量（见 styles.css），所以只写 data-wallpaper-id；
+   * 外链图片用 backgroundImage 覆盖 —— 内置规则里 background-image 是
+   * 用 var() 拼的，写在元素行内样式上的优先级更高，能正常盖住。
+   */
   function applyWallpaper() {
     var w = cfg && cfg.wallpaper;
     root.style.backgroundImage = '';
+    root.removeAttribute('data-wallpaper-id');
     if (!w) { root.removeAttribute('data-wallpaper'); return; }
+
     if (w.type === 'file' && w.path) {
       root.setAttribute('data-wallpaper', 'file');
       root.style.backgroundImage = 'url(' + BASE + '/' + w.path + ')';
     } else if (w.type === 'url' && w.url) {
       root.setAttribute('data-wallpaper', 'url');
-      root.style.backgroundImage = 'url(' + w.url + ')';
+      // 渐变是 CSS 值不是地址（右键菜单里的「纯色深空」就是这么传的）
+      root.style.backgroundImage = /^\s*(linear|radial|conic)-gradient\(/i.test(w.url)
+        ? w.url
+        : 'url(' + w.url + ')';
     } else {
       root.setAttribute('data-wallpaper', 'builtin');
+      root.setAttribute('data-wallpaper-id', w.id || 'aurora');
     }
   }
 
@@ -257,6 +316,15 @@
    *
    * 导航条 / Dock 的高度从 CSS 变量里读实际值，不硬编码 ——
    * 窄屏媒体查询改了高度，JS 自动跟上，不会出现图标被导航条压住。
+   *
+   * ── 虚拟显示器分辨率（display）与这两层坐标 ──
+   * · `viewport()` 返回**逻辑桌面**的尺寸，也就是窗口/图标坐标所在的坐标系。
+   *   设了 1280×800 就恒返回 1280×800，与真实屏幕无关 —— 所有摆位逻辑
+   *   都跑在逻辑坐标系里，因此手机和桌面端能摆出同一套布局。
+   * · `physViewport()` 返回真实可视区尺寸。只用于两件事：
+   *   计算缩放比、把 JSON 配置里的像素值换算成逻辑像素。
+   * · 指针事件给的是**屏幕坐标**，必须经 `toLogical()` 换算回逻辑坐标，
+   *   否则缩放 ≠1 时拖动会「跑偏」（手指走 100px，窗口走 100/scale）。
    * ═══════════════════════════════════════════════════════════════════ */
   function metric(name, fallback) {
     var v = getComputedStyle(root).getPropertyValue(name).trim();
@@ -264,14 +332,86 @@
     return isFinite(n) && n > 0 ? n : fallback;
   }
   function navbarH() { return metric('--navbar-h', 40); }
-  function viewport() {
+  /** 真实可视区（物理像素） */
+  function physViewport() {
     return { w: root.clientWidth || window.innerWidth, h: root.clientHeight || window.innerHeight };
   }
-  /** 窗口可用的自由区域（扣掉导航条与 Dock） */
+  /** 逻辑桌面尺寸：设了虚拟分辨率就用它，否则等于物理视口（自适应） */
+  function viewport() {
+    var d = cfg && cfg.display;
+    if (d && d.preset && d.preset !== 'auto' && d.w > 0 && d.h > 0) {
+      return { w: d.w, h: d.h };
+    }
+    return physViewport();
+  }
+  /** 当前缩放比：逻辑 → 物理 */
+  function displayScale() {
+    var d = cfg && cfg.display;
+    if (!d || !d.preset || d.preset === 'auto' || !(d.w > 0 && d.h > 0)) return 1;
+    if (d.scale === 'fit' || d.scale == null) {
+      var pv = physViewport();
+      // 取较小的一边，保证逻辑桌面完整可见（letterbox 而不是裁切）
+      var s = Math.min(pv.w / d.w, pv.h / d.h);
+      return isFinite(s) && s > 0 ? s : 1;
+    }
+    var n = Number(d.scale);
+    return isFinite(n) && n > 0 ? n : 1;
+  }
+  /** 屏幕坐标 → 逻辑桌面坐标 */
+  function toLogical(x, y) {
+    var s = displayScale();
+    if (!s || s === 1) return { x: x, y: y };
+    var r = vscreen ? vscreen.getBoundingClientRect() : { left: 0, top: 0 };
+    return { x: (x - r.left) / s, y: (y - r.top) / s };
+  }
+  /** 把逻辑坐标尺寸拍成物理像素的 CSS（用于定位弹出的菜单/对话框） */
+  function toPhysicalPx(n) {
+    var s = displayScale();
+    return Math.round(n * (s || 1));
+  }
+  /** 窗口可用的自由区域（扣掉导航条与 Dock），逻辑坐标 */
   function workArea() {
     var vp = viewport();
     var top = navbarH();
     return { top: top, left: 0, w: vp.w, h: vp.h - top, bottom: vp.h };
+  }
+
+  /**
+   * 应用虚拟分辨率：把 #runx-desktop 的内容全部挂到 .rx-vscreen 上，
+   * 给它逻辑尺寸 + transform: scale() 并居中。
+   * 自适应（auto）时 vscreen 就等于视口、scale=1，等同于没有这一层 ——
+   * 保留这一层结构是为了让两套模式走同一条代码路径，不出分支 bug。
+   */
+  function applyDisplay() {
+    if (!vscreen) return;
+    var vp = viewport(), pv = physViewport();
+    var s = displayScale();
+    var scaled = Math.abs(s - 1) > 0.001;
+
+    vscreen.style.width = px(vp.w);
+    vscreen.style.height = px(vp.h);
+    vscreen.dataset.scaled = scaled ? '1' : '0';
+
+    if (scaled) {
+      // 居中：把缩放后的逻辑桌面摆在物理视口正中
+      var ox = Math.max(0, (pv.w - vp.w * s) / 2);
+      var oy = Math.max(0, (pv.h - vp.h * s) / 2);
+      vscreen.style.transform = 'translate(' + px(ox) + ', ' + px(oy) + ') scale(' + s + ')';
+      root.setAttribute('data-letterbox', '1');
+    } else {
+      vscreen.style.transform = '';
+      root.removeAttribute('data-letterbox');
+    }
+
+    // 徽标：只有真的缩放（≠100%）且不是自适应时才提示，避免无意义打扰
+    if (badge) {
+      if (scaled && cfg && cfg.display && cfg.display.preset !== 'auto') {
+        badge.textContent = vp.w + '×' + vp.h + ' · ' + Math.round(s * 100) + '%';
+        badge.dataset.show = '1';
+      } else {
+        badge.dataset.show = '0';
+      }
+    }
   }
 
   /* ═══════════════════════════════════════════════════════════════════
@@ -345,9 +485,14 @@
         e.preventDefault();
         e.stopPropagation();
         selectIcon(node);
-        openContextMenu(e.clientX, e.clientY, iconMenuItems(ic, app));
+        var p = pointOfPhysical(e);
+        openContextMenu(p.x, p.y, iconMenuItems(ic, app));
       });
-
+      // 触屏长按 = 右键（手机上没有 contextmenu 事件）
+      bindLongPress(node, function (x, y) {
+        selectIcon(node);
+        openContextMenu(x, y, iconMenuItems(ic, app));
+      }, { when: function () { return !iconDragActive; } });
       makeIconDraggable(node, ic, step);
       surface.appendChild(node);
     });
@@ -367,6 +512,7 @@
     function onDown(e) {
       if (e.button != null && e.button !== 0) return;
       dragging = true; moved = false;
+      iconDragActive = true;
       var p = pointOf(e);
       sx = p.x; sy = p.y;
       ox = ic.x * step; oy = ic.y * step;
@@ -391,6 +537,7 @@
     function onUp() {
       if (!dragging) return;
       dragging = false;
+      iconDragActive = false;
       node.classList.remove('dragging');
       unbind();
       if (!moved) return;
@@ -433,11 +580,100 @@
     node.addEventListener('touchstart', onDown, { passive: false });
   }
 
+  /**
+   * 指针位置 → **逻辑桌面坐标**。
+   *
+   * 为什么在这里就换算掉：拖动 / 缩放 / 图标摆放全都跑在逻辑坐标系里，
+   * 若让各调用点自己换算，漏一处就会出现「缩放 ≠1 时拖动跑偏」——
+   * 手指走 100px 而窗口走 100/scale。统一在这里收口。
+   * 需要**屏幕坐标**的场景（弹菜单定位）用 pointOfPhysical()。
+   */
   function pointOf(e) {
+    var x, y;
+    if (e.touches && e.touches.length) { x = e.touches[0].clientX; y = e.touches[0].clientY; }
+    else if (e.changedTouches && e.changedTouches.length) { x = e.changedTouches[0].clientX; y = e.changedTouches[0].clientY; }
+    else { x = e.clientX; y = e.clientY; }
+    return toLogical(x, y);
+  }
+  /** 指针位置 → 屏幕坐标（弹层定位用） */
+  function pointOfPhysical(e) {
     if (e.touches && e.touches.length) return { x: e.touches[0].clientX, y: e.touches[0].clientY };
     if (e.changedTouches && e.changedTouches.length) return { x: e.changedTouches[0].clientX, y: e.changedTouches[0].clientY };
     return { x: e.clientX, y: e.clientY };
   }
+
+  /* ═══════════════════════════════════════════════════════════════════
+   * 触屏长按 → 右键菜单
+   *
+   * 手机上不会有 contextmenu 事件，可右键菜单承载了「图标整理 / 窗口操作 /
+   * 收起应用」这些没有其他入口的命令。所以必须给每个右键点补一个长按等价物。
+   *
+   * 实现要点：
+   *   · **500ms** 阈值 —— 短于这个时长会和滑动/滚动冲突；长于 600ms 手感迟钝。
+   *   · **10px 容差**：手指按住后有轻微抖动很正常，超过 10px 视为滚动/拖动，
+   *     立刻取消长按（否则用户一滑就误弹菜单）。
+   *   · **要有震动反馈**：有 vibrate 就用 15ms 轻震，这是手机上「触发了」的
+   *     主要体感信号，没有它用户不知道自己按够时间了。
+   *   · 命中后调 preventDefault 阻止随后的 click / 滚动。
+   *
+   * @param {Element} node     绑定目标
+   * @param {(x:number,y:number)=>void} handler 触发时的回调（坐标已换算好）
+   * @param {{move?:number, ms?:number, when?:()=>boolean}} [opts]
+   *        move 容差像素、ms 时长、when 额外条件（如「只在窄屏启用」）
+   */
+  function bindLongPress(node, handler, opts) {
+    opts = opts || {};
+    var MOVE = safeMs(opts.move, 10, 4, 40);
+    var MS = safeMs(opts.ms, 500, 300, 1500);
+    var timer = null, sx = 0, sy = 0, fired = false;
+
+    function clear() {
+      if (timer) { clearTimeout(timer); timer = null; }
+    }
+    function onStart(e) {
+      if (opts.when && !opts.when()) return;
+      if (e.touches && e.touches.length > 1) { clear(); return; }  // 多指是缩放，不是长按
+      var p = pointOf(e);
+      sx = p.x; sy = p.y; fired = false;
+      clear();
+      timer = setTimeout(function () {
+        timer = null;
+        fired = true;
+        try { if (navigator.vibrate) navigator.vibrate(15); } catch (err) { /* 忽略 */ }
+        handler(sx, sy, e);
+      }, MS);
+    }    function onMove(e) {
+      if (!timer) return;
+      var p = pointOf(e);
+      if (Math.abs(p.x - sx) > MOVE || Math.abs(p.y - sy) > MOVE) clear();
+    }
+    function onEnd(e) {
+      clear();
+      // 长按已触发 → 吃掉这次 click，避免菜单刚弹出就被同一根手指点掉
+      if (fired) {
+        fired = false;
+        if (e.cancelable) e.preventDefault();
+        e.stopPropagation();
+      }
+    }
+    node.addEventListener('touchstart', onStart, { passive: true });
+    node.addEventListener('touchmove', onMove, { passive: true });
+    node.addEventListener('touchend', onEnd);
+    node.addEventListener('touchcancel', function () { clear(); fired = false; });
+    // 桌面端滚轮/鼠标按压期间滑走也要取消
+    node.addEventListener('mouseleave', function () { if (timer && !fired) clear(); });
+    return clear;
+  }
+
+  /** 是否触屏设备（用于决定提示文案与热区，不影响功能可用性） */
+  function isTouch() {
+    return ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+  }
+
+  /* 长按与拖拽是同一根手指上的两种意图，必须互斥 —— 否则拖着图标走
+     500ms 会突然弹出菜单，手感很差。两个标志位在拖拽开始/结束时翻转。 */
+  var iconDragActive = false;   // 正在拖桌面图标
+  var longPressMute = false;    // 本次触摸起点在窗口/Dock 内，桌面长按不参与
 
   function debouncedPatchIcon(ic) {
     clearTimeout(iconTimers[ic.id]);
@@ -563,10 +799,15 @@
       list.forEach(function (s) {
         if (!s || !s.app) return;
         var app = appOf(s.app);
-        if (!app) return;                                  // 应用已不在 apps.json 里
-        // node 应用没在跑就不恢复 —— 否则会开出一堆连不上的死窗口。
-        // 判断走 isRunning（它读的是 refreshApps 摊平后的 app.state）。
-        if (!isRunning(app)) return;
+        if (!app) return;                                  // 应用已从 apps.json 卸载
+
+        // 应用没在跑时是否恢复？这里有个容易搞错的取舍。
+        // 早先的做法是「没在跑就跳过」，但 app 的状态是**会变**的：
+        // 崩溃重启中（restarting）恢复、超过重启上限后变 failed 就不恢复 ——
+        // 同一个存档刷新两次，结果不一样，用户会以为窗口数据丢了。
+        // 所以现在只在「应用真的不在了」时跳过；没起来也照开窗口，
+        // 窗口里的错误态本身就能告诉用户「应用没跑起来」，
+        // 这比窗口静默消失好得多。
         var id = openApp(s.app, { silent: true, geom: clampGeomToView(s) });
         if (!id || !windows[id]) return;
         if (s.toolbarStyle && s.toolbarStyle !== 'unified') setToolbarStyle(id, s.toolbarStyle);
@@ -591,13 +832,52 @@
     var wa = workArea();
     // 窄屏：直接用满可用区（手机上开个小窗口没意义）
     if (narrow()) return { x: 6, y: 6, w: wa.w - 12, h: wa.h - 12 };
-    // 唯一边距：新窗口稍微错开，像真桌面那样能看见下面那张
+
+    var wd = (cfg && cfg.windowDefaults) || {};
+    var w = clamp(Number(wd.w) || 860, 320, Math.max(320, wa.w - 16));
+    var h = clamp(Number(wd.h) || 580, 220, Math.max(220, wa.h - 16));
+
+    // 首选位置由「新建窗口默认位置」决定：
+    //   cascade   —— 每开一个稍微错开，像真桌面那样能看见下面那张
+    //   center    —— 正中
+    //   large     —— 尽量铺满可用区（尺寸也不受 wd 限制）
+    //   halfLeft / halfRight / quarter —— 平铺分区
+    var mode = wd.preset || 'cascade';
+    if (mode === 'large') {
+      w = Math.max(320, wa.w - 120);
+      h = Math.max(220, wa.h - 120);
+      mode = 'center';
+    }
+    if (mode === 'center') {
+      return {
+        x: clamp(Math.round((wa.w - w) / 2), 8, Math.max(8, wa.w - w - 8)),
+        y: clamp(wa.top + Math.round((wa.h - h) / 2), wa.top, Math.max(wa.top, wa.bottom - h - 6)),
+        w: w, h: h,
+      };
+    }
+    if (mode === 'halfLeft' || mode === 'halfRight') {
+      var hw = Math.max(320, Math.floor(wa.w / 2) - 10);
+      return {
+        x: mode === 'halfLeft' ? 8 : Math.max(8, wa.w - hw - 8),
+        y: wa.top + 8,
+        w: hw, h: Math.max(220, wa.h - 24),
+      };
+    }
+    if (mode === 'quarter') {
+      var qw = Math.max(280, Math.floor(wa.w / 2) - 10);
+      var qh = Math.max(200, Math.floor(wa.h / 2) - 10);
+      var qn = index % 4;
+      return {
+        x: (qn % 2) ? Math.max(8, wa.w - qw - 8) : 8,
+        y: wa.top + ((qn >= 2) ? Math.floor(wa.h / 2) : 8),
+        w: qw, h: qh,
+      };
+    }
+    // cascade（默认）
     var off = (index % 6) * 26;
-    var w = Math.min(860, Math.max(320, wa.w - 120));
-    var h = Math.min(580, Math.max(220, wa.h - 120));
     return {
       x: clamp(48 + off, 8, Math.max(8, wa.w - w - 8)),
-      y: clamp(28 + off, 6, Math.max(6, wa.h - h - 6)),
+      y: clamp(wa.top + 20 + off, wa.top, Math.max(wa.top, wa.bottom - h - 6)),
       w: w, h: h,
     };
   }
@@ -813,8 +1093,13 @@
     // 右键窗口工具栏 → 窗口操作菜单
     toolbar.addEventListener('contextmenu', function (e) {
       e.preventDefault();
-      openContextMenu(e.clientX, e.clientY, windowMenuItems(id));
+      var p = pointOfPhysical(e);
+      openContextMenu(p.x, p.y, windowMenuItems(id));
     });
+    // 同上的触屏等价物：工具栏空白处长按也能调出窗口菜单
+    bindLongPress(toolbar, function (x, y) {
+      openContextMenu(x, y, windowMenuItems(id));
+    }, { when: function () { return !dragState; } });
 
     focusWindow(id);
     if (!opts.silent) {
@@ -1187,7 +1472,12 @@
       });
       b.addEventListener('contextmenu', function (e) {
         e.preventDefault();
-        openContextMenu(e.clientX, e.clientY, windowMenuItems(id));
+        var p = pointOfPhysical(e);
+        openContextMenu(p.x, p.y, windowMenuItems(id));
+      });
+      // 触屏长按 Dock 图标：先震一下再弹菜单（震动是「触发了」的体感信号）
+      bindLongPress(b, function (x, y) {
+        openContextMenu(x, y, windowMenuItems(id));
       });
       dock.appendChild(b);
     });
@@ -1213,7 +1503,7 @@
       });
     }
 
-    root.appendChild(dock);
+    vscreen.appendChild(dock);
   }
 
   /* ═══════════════════════════════════════════════════════════════════
@@ -1314,7 +1604,28 @@
       { label: '浅色', glyph: cfg && cfg.theme === 'light' ? '✓' : '', act: function () { setTheme('light'); } },
       { label: '深色', glyph: cfg && cfg.theme === 'dark' ? '✓' : '', act: function () { setTheme('dark'); } },
       { label: '跟随系统', glyph: !cfg || cfg.theme === 'auto' ? '✓' : '', act: function () { setTheme('auto'); } },
+      { sep: true },
+      { head: '显示分辨率' },
     ];
+
+    // 分辨率与强调色的快捷项直接由服务端下发的枚举生成 ——
+    // 加一个预设只改服务端，菜单自动多一项，不会两边不同步。
+    ((cfg && cfg.meta && cfg.meta.display_presets) || []).forEach(function (p) {
+      var on = ((cfg.display && cfg.display.preset) || 'auto') === p.id;
+      viewMenu.push({
+        label: p.label, glyph: on ? '✓' : '',
+        act: function () { setDisplay({ preset: p.id, scale: p.scale || 'fit' }); },
+      });
+    });
+    viewMenu.push({ label: '显示设置…', glyph: '⚙', act: openSettings });
+
+    viewMenu.push({ sep: true }, { head: '强调色' });
+    ((cfg && cfg.meta && cfg.meta.accents) || []).forEach(function (a) {
+      viewMenu.push({
+        label: a.label, glyph: (cfg.accent || 'blue') === a.id ? '✓' : '',
+        act: function () { setAccent(a.id); },
+      });
+    });
 
     var windowMenu = [
       { label: '最小化', key: '⌘M', disabled: disabled, act: function () { minimizeWindow(activeId); } },
@@ -1415,7 +1726,7 @@
     m.dataset.rootLabel = rootBtn.dataset.rootLabel;
     m.style.left = px(clamp(r.left, 6, viewport().w - 216));
     m.style.top = px(r.bottom + 3);
-    root.appendChild(m);
+    vscreen.appendChild(m);
     openMenu = m;
     rootBtn.setAttribute('aria-expanded', 'true');
     // 超出视口就往上贴
@@ -1457,20 +1768,38 @@
 
   /** 桌面右键菜单 */
   function desktopMenuItems() {
-    return [
+    var items = [
       { label: '新建终端窗口', glyph: '⌨', act: function () { openApp('term'); } },
       { label: '打开应用…', glyph: '↗', key: '⌘O', act: openLauncher },
+      { label: '开始菜单', glyph: '⊞', key: '⌘␣', act: openStartMenu },
       { sep: true },
       { label: '整理图标', glyph: '▦', act: tidyIcons },
       { label: '显示全部窗口', act: showAll },
       { sep: true },
       { head: '壁纸' },
-      { label: '极光（内置）', glyph: !cfg || !cfg.wallpaper || cfg.wallpaper.type === 'builtin' ? '✓' : '',
-        act: function () { setWallpaper({ type: 'builtin', id: 'aurora' }); } },
-      { label: '纯色深空', act: function () { setWallpaper({ type: 'url', url: 'linear-gradient(160deg,#0b1020,#1b1030)' }); } },
-      { sep: true },
-      { label: '桌面设置…', glyph: '⚙', act: openSettings },
     ];
+    var cur = cfg && cfg.wallpaper;
+    var curId = (!cur || cur.type === 'builtin') ? ((cur && cur.id) || 'aurora') : null;
+    ((cfg && cfg.meta && cfg.meta.wallpapers) || []).forEach(function (w) {
+      items.push({
+        label: w.label, glyph: curId === w.id ? '✓' : '',
+        act: function () { setWallpaper({ type: 'builtin', id: w.id }); },
+      });
+    });
+    items.push(
+      { sep: true },
+      { head: '显示分辨率' });
+    ((cfg && cfg.meta && cfg.meta.display_presets) || []).forEach(function (p) {
+      var on = ((cfg.display && cfg.display.preset) || 'auto') === p.id;
+      items.push({
+        label: p.label, glyph: on ? '✓' : '',
+        act: function () { setDisplay({ preset: p.id, scale: p.scale || 'fit' }); },
+      });
+    });
+    items.push(
+      { sep: true },
+      { label: '桌面设置…', glyph: '⚙', key: '⌘,', act: openSettings });
+    return items;
   }
   function iconMenuItems(ic, app) {
     return [
@@ -1616,7 +1945,7 @@
     row.appendChild(cancel); row.appendChild(ok);
     card.appendChild(row);
     back.appendChild(card);
-    root.appendChild(back);
+    vscreen.appendChild(back);
 
     function done(go) {
       back.remove();
@@ -1655,7 +1984,7 @@
     card.appendChild(head);
     card.appendChild(bodyNode);
     back.appendChild(card);
-    root.appendChild(back);
+    vscreen.appendChild(back);
     function done() { back.remove(); document.removeEventListener('keydown', onKey, true); }
     function onKey(e) { if (e.key === 'Escape') { e.stopPropagation(); done(); } }
     x.addEventListener('click', done);
@@ -1693,6 +2022,7 @@
 
   function showShortcuts() {
     var rows = [
+      ['⌘␣', '开始菜单'],
       ['⌘O', '打开应用'],
       ['⌘W', '关闭窗口'],
       ['⌘M', '最小化窗口'],
@@ -1701,9 +2031,10 @@
       ['⌘⌃M', '最大化 / 还原'],
       ['⌘⌃F', '全屏 / 退出全屏'],
       ['⌘R', '重新加载应用'],
+      ['⌘⇧A', '应用管理'],
       ['⌘`', '切换窗口'],
       ['⌘,', '桌面设置'],
-      ['Esc', '退出全屏 / 关菜单'],
+      ['Esc', '关菜单 / 退出全屏'],
     ];
     var body = el('div');
     body.style.cssText = 'display:grid;grid-template-columns:auto 1fr;gap:7px 18px;font:var(--font-body)';
@@ -1823,9 +2154,9 @@
 
   function openSettings() {
     var body = el('div');
-    body.style.cssText = 'display:grid;gap:16px';
+    body.style.cssText = 'display:grid;gap:18px';
 
-    // 主题
+    /* ── 外观：明暗 ── */
     body.appendChild(el('div', 'section-label', '外观'));
     var seg = el('div', 'rx-segmented');
     [['light', '浅色'], ['dark', '深色'], ['auto', '跟随系统']].forEach(function (pair) {
@@ -1840,7 +2171,196 @@
     });
     body.appendChild(seg);
 
-    // Dock
+    /* ── 强调色：8 色预设 ──
+       只换「有意义的强调」（选中、焦点、进度），不整体染色（§2.2）。
+       色块直接用服务端下发的 id 上的 computed 值取色 —— 不硬编码十六进制，
+       否则以后调色还得改客户端。 */
+    body.appendChild(el('div', 'section-label', '强调色'));
+    var accentRow = el('div', 'rx-swatches');
+    accentRow.setAttribute('role', 'radiogroup');
+    accentRow.setAttribute('aria-label', '强调色');
+    var accents = (cfg.meta && cfg.meta.accents) || [];
+    accents.forEach(function (a) {
+      var b = el('button', 'rx-swatch');
+      b.type = 'button';
+      b.dataset.accent = a.id;
+      b.setAttribute('role', 'radio');
+      b.setAttribute('title', a.label);
+      b.setAttribute('aria-label', a.label);
+      b.setAttribute('aria-checked', (cfg.accent || 'blue') === a.id ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        setAccent(a.id);
+        var kids = accentRow.children;
+        for (var i = 0; i < kids.length; i++) kids[i].setAttribute('aria-checked', 'false');
+        b.setAttribute('aria-checked', 'true');
+      });
+      accentRow.appendChild(b);
+    });
+    if (!accents.length) accentRow.appendChild(el('span', 'caption', '服务端未下发强调色列表'));
+    body.appendChild(accentRow);
+
+    /* ── 壁纸 ── */
+    body.appendChild(el('div', 'section-label', '壁纸'));
+    var wallRow = el('div', 'rx-wall-grid');
+    var walls = (cfg.meta && cfg.meta.wallpapers) || [];
+    var curWall = cfg.wallpaper || {};
+    walls.forEach(function (w) {
+      var b = el('button', 'rx-wall');
+      b.type = 'button';
+      b.dataset.wallId = w.id;
+      b.setAttribute('title', w.label);
+      b.setAttribute('aria-label', w.label);
+      b.setAttribute('aria-pressed',
+        curWall.type !== 'url' && curWall.type !== 'file' && (curWall.id || 'aurora') === w.id ? 'true' : 'false');
+      b.appendChild(el('span', 'rx-wall-name', w.label));
+      b.addEventListener('click', function () {
+        setWallpaper({ type: 'builtin', id: w.id });
+        var kids = wallRow.children;
+        for (var i = 0; i < kids.length; i++) kids[i].setAttribute('aria-pressed', 'false');
+        b.setAttribute('aria-pressed', 'true');
+      });
+      wallRow.appendChild(b);
+    });
+    body.appendChild(wallRow);
+
+    // 自定义图片地址（也允许直接填 CSS 渐变）
+    var urlRow = el('div', 'rx-row');
+    var urlInput = el('input', 'rx-field');
+    urlInput.type = 'url';
+    urlInput.placeholder = '图片地址，或 linear-gradient(…)';
+    urlInput.style.flex = '1';
+    urlInput.value = (curWall.type === 'url' && curWall.url) ? curWall.url : '';
+    var urlBtn = el('button', 'rx-btn', '应用');
+    urlBtn.addEventListener('click', function () {
+      var v = urlInput.value.trim();
+      if (!v) { showToast('请先填写图片地址'); return; }
+      setWallpaper({ type: 'url', url: v });
+      var kids = wallRow.children;
+      for (var i = 0; i < kids.length; i++) kids[i].setAttribute('aria-pressed', 'false');
+    });
+    urlRow.appendChild(urlInput); urlRow.appendChild(urlBtn);
+    body.appendChild(urlRow);
+
+    /* ── 显示：虚拟分辨率 + 缩放 ──
+       这是「桌面自己的分辨率」，与设备真实分辨率无关：设成 1280×800 后，
+       整张桌面按 1280×800 布局再等比缩放居中，于是手机和电脑上摆出来的
+       窗口位置是一致的。 */
+    body.appendChild(el('div', 'section-label', '显示分辨率'));
+    var cur = (cfg.display && cfg.display.preset) || 'auto';
+    var presetWrap = el('div', 'rx-chip-wrap');
+    presetWrap.setAttribute('role', 'radiogroup');
+    presetWrap.setAttribute('aria-label', '显示分辨率');
+    var presets = (cfg.meta && cfg.meta.display_presets) || [];
+    presets.forEach(function (p) {
+      var b = el('button', 'rx-chip');
+      b.type = 'button';
+      b.setAttribute('role', 'radio');
+      b.setAttribute('aria-checked', cur === p.id ? 'true' : 'false');
+      b.textContent = p.label;
+      b.addEventListener('click', function () {
+        setDisplay({ preset: p.id, scale: p.scale || 'fit' });
+        var kids = presetWrap.children;
+        for (var i = 0; i < kids.length; i++) kids[i].setAttribute('aria-checked', 'false');
+        b.setAttribute('aria-checked', 'true');
+      });
+      presetWrap.appendChild(b);
+    });
+    body.appendChild(presetWrap);
+
+    // 自定义尺寸
+    var cRow = el('div', 'rx-row');
+    cRow.appendChild(el('span', 'caption', '自定义'));
+    var cw = el('input', 'rx-field rx-field-num');
+    cw.type = 'number'; cw.min = '320'; cw.max = '5120'; cw.placeholder = '宽';
+    cw.value = String((cfg.display && cfg.display.w) || '');
+    var ch = el('input', 'rx-field rx-field-num');
+    ch.type = 'number'; ch.min = '240'; ch.max = '2880'; ch.placeholder = '高';
+    ch.value = String((cfg.display && cfg.display.h) || '');
+    var cBtn = el('button', 'rx-btn', '应用尺寸');
+    cBtn.addEventListener('click', function () {
+      var w = Number(cw.value), h = Number(ch.value);
+      if (!(w >= 320 && w <= 5120) || !(h >= 240 && h <= 2880)) {
+        showToast('宽需在 320–5120、高需在 240–2880 之间');
+        return;
+      }
+      setDisplay({ preset: 'custom', w: w, h: h });
+    });
+    cRow.appendChild(cw);
+    cRow.appendChild(el('span', 'caption', '×'));
+    cRow.appendChild(ch);
+    cRow.appendChild(cBtn);
+    body.appendChild(cRow);
+
+    // 缩放策略：等比铺满 / 固定比例
+    var sRow = el('div', 'rx-row');
+    sRow.appendChild(el('span', 'caption', '缩放'));
+    var sSeg = el('div', 'rx-segmented');
+    var curScale = (cfg.display && cfg.display.scale) || 'fit';
+    [['fit', '等比铺满'], [1, '100%'], [0.75, '75%'], [1.25, '125%']].forEach(function (pair) {
+      var b = el('button', null, pair[1]);
+      b.setAttribute('aria-selected', String(curScale) === String(pair[0]) ? 'true' : 'false');
+      b.addEventListener('click', function () {
+        var d2 = Object.assign({}, cfg.display, { scale: pair[0] });
+        if (!d2.preset) d2.preset = 'auto';
+        setDisplay(d2);
+        for (var i = 0; i < sSeg.children.length; i++) sSeg.children[i].setAttribute('aria-selected', 'false');
+        b.setAttribute('aria-selected', 'true');
+      });
+      sSeg.appendChild(b);
+    });
+    sRow.appendChild(sSeg);
+    body.appendChild(sRow);
+    body.appendChild(el('div', 'caption',
+      '当前逻辑桌面 ' + viewport().w + ' × ' + viewport().h +
+      '，缩放 ' + Math.round(displayScale() * 100) + '%。手机横竖屏切换后会自动重算。'));
+
+    /* ── 新建窗口的默认尺寸 ── */
+    body.appendChild(el('div', 'section-label', '新窗口默认尺寸'));
+    var wpRow = el('div', 'rx-row');
+    wpRow.appendChild(el('span', 'caption', '位置'));
+    var wpWrap = el('div', 'rx-chip-wrap');
+    var wd = cfg.windowDefaults || {};
+    [['cascade', '层叠'], ['center', '居中'], ['halfLeft', '左半屏'],
+      ['halfRight', '右半屏'], ['quarter', '四分屏'], ['large', '几乎铺满']].forEach(function (pair) {
+      var b = el('button', 'rx-chip');
+      b.type = 'button';
+      b.setAttribute('aria-checked', (wd.preset || 'cascade') === pair[0] ? 'true' : 'false');
+      b.textContent = pair[1];
+      b.addEventListener('click', function () {
+        setWindowDefaults({ preset: pair[0] });
+        for (var i = 0; i < wpWrap.children.length; i++) wpWrap.children[i].setAttribute('aria-checked', 'false');
+        b.setAttribute('aria-checked', 'true');
+      });
+      wpWrap.appendChild(b);
+    });
+    wpRow.appendChild(wpWrap);
+    body.appendChild(wpRow);
+
+    var wsizeRow = el('div', 'rx-row');
+    wsizeRow.appendChild(el('span', 'caption', '尺寸'));
+    var ww = el('input', 'rx-field rx-field-num');
+    ww.type = 'number'; ww.min = '320'; ww.max = '5120'; ww.placeholder = '宽';
+    ww.value = String(wd.w || 860);
+    var wh = el('input', 'rx-field rx-field-num');
+    wh.type = 'number'; wh.min = '220'; wh.max = '2880'; wh.placeholder = '高';
+    wh.value = String(wd.h || 580);
+    var wBtn = el('button', 'rx-btn', '保存尺寸');
+    wBtn.addEventListener('click', function () {
+      var w2 = Number(ww.value), h2 = Number(wh.value);
+      if (!(w2 >= 320 && w2 <= 5120) || !(h2 >= 220 && h2 <= 2880)) {
+        showToast('宽需在 320–5120、高需在 220–2880 之间');
+        return;
+      }
+      setWindowDefaults({ w: w2, h: h2 });
+    });
+    wsizeRow.appendChild(ww);
+    wsizeRow.appendChild(el('span', 'caption', '×'));
+    wsizeRow.appendChild(wh);
+    wsizeRow.appendChild(wBtn);
+    body.appendChild(wsizeRow);
+    body.appendChild(el('div', 'caption', '层叠/居中/分区会盖过这里的宽高；四分屏与半屏按屏幕算。'));
+
+    /* ── Dock ── */
     body.appendChild(el('div', 'section-label', '应用坞'));
     var dockSeg = el('div', 'rx-segmented');
     var curPos = (cfg.taskbar && cfg.taskbar.position) || 'bottom';
@@ -1856,10 +2376,9 @@
     });
     body.appendChild(dockSeg);
 
-    // 网格
+    /* ── 网格 ── */
     body.appendChild(el('div', 'section-label', '图标网格'));
-    var gridRow = el('div');
-    gridRow.style.cssText = 'display:flex;align-items:center;gap:10px';
+    var gridRow = el('div', 'rx-row');
     gridRow.appendChild(el('span', 'caption', '单元格尺寸'));
     var range = el('input');
     range.type = 'range';
@@ -1876,10 +2395,9 @@
     gridRow.appendChild(range); gridRow.appendChild(out);
     body.appendChild(gridRow);
 
-    // 动作
+    /* ── 操作 ── */
     body.appendChild(el('div', 'section-label', '操作'));
-    var row = el('div');
-    row.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap';
+    var row = el('div', 'rx-row');
     var b1 = el('button', 'rx-btn', '整理图标');
     b1.addEventListener('click', function () { tidyIcons(); });
     var b2 = el('button', 'rx-btn', '关闭全部窗口');
@@ -1887,7 +2405,15 @@
       order.slice().forEach(function (id) { closeWindow(id, false); });
       showToast('已关闭全部窗口');
     });
-    row.appendChild(b1); row.appendChild(b2);
+    var b3 = el('button', 'rx-btn', '重置外观');
+    b3.addEventListener('click', function () {
+      confirmAction('重置外观', '主题、强调色、壁纸都回到默认值，窗口与图标不受影响。', function () {
+        setTheme('auto'); setAccent('blue');
+        setWallpaper({ type: 'builtin', id: 'aurora' });
+        showToast('外观已重置');
+      });
+    });
+    row.appendChild(b1); row.appendChild(b2); row.appendChild(b3);
     body.appendChild(row);
 
     sheet('桌面设置', body);
@@ -1944,14 +2470,52 @@
       .catch(function (e) { showToast('主题没能保存：' + e.message); });
   }
   function setWallpaper(w) {
+    // 本地先应用（乐观更新）：换壁纸是纯视觉操作，等一个网络来回会显得卡。
+    // 服务端成功后会 reloadDesktop，两边结果一致（服务端也会补全 id）。
+    cfg.wallpaper = w;
+    applyWallpaper();
     api('/desktop/wallpaper', { method: 'PUT', body: JSON.stringify(w) })
       .then(function () { return reloadDesktop(); })
       .catch(function (e) { showToast('壁纸没能保存：' + e.message); });
-    if (w.type === 'url' && /^linear-gradient/.test(w.url)) {
-      // 渐变是 CSS 值不是地址，本地立刻应用免得等一个来回
-      root.setAttribute('data-wallpaper', 'gradient');
-      root.style.backgroundImage = w.url;
-    }
+  }
+
+  /** 强调色：本地立刻换（纯 CSS 变量），失败再回滚 */
+  function setAccent(id) {
+    var prev = cfg.accent;
+    cfg.accent = id;
+    applyTheme();
+    api('/desktop/accent', { method: 'PUT', body: JSON.stringify({ accent: id }) })
+      .catch(function (e) {
+        cfg.accent = prev; applyTheme();
+        showToast('强调色没能保存：' + e.message);
+      });
+  }
+
+  /**
+   * 虚拟显示器分辨率。
+   * @param {{preset?:string, w?:number, h?:number, scale?:number|string}} d
+   * 传 preset（服务端预设名）或 { preset:'custom', w, h } 自定义尺寸；
+   * scale 传 'fit' 等比铺满，或 0.25–3 的数字表示固定缩放。
+   */
+  function setDisplay(d) {
+    api('/desktop/display', { method: 'PUT', body: JSON.stringify(d) })
+      .then(function () { return reloadDesktop(); })
+      .then(function () { showToast('显示已切换：' + viewport().w + '×' + viewport().h); })
+      .catch(function (e) { showToast('分辨率没能应用：' + e.message); });
+  }
+
+  /** 新建窗口的默认尺寸与位置策略 */
+  function setWindowDefaults(d) {
+    return api('/desktop/window-defaults', { method: 'PUT', body: JSON.stringify(d) })
+      .then(function (r) {
+        // 服务端会夹取并回填完整对象，以它为准；万一没回就本地合并兜底
+        cfg.windowDefaults = (r && r.windowDefaults) ||
+          Object.assign({ preset: 'cascade', w: 860, h: 580 }, cfg.windowDefaults, d);
+        renderMenus();          // 「窗口」菜单里的勾选状态跟着变
+        showToast('新窗口默认尺寸已更新');
+        return cfg.windowDefaults;
+      })
+      .catch(function (e) { showToast('默认尺寸没能保存：' + e.message); });
   }
   function setTaskbar(p) {
     cfg.taskbar = Object.assign({ position: 'bottom', show_clock: true }, cfg.taskbar, p);
@@ -1998,6 +2562,7 @@
     var mod = e.metaKey || e.ctrlKey;
 
     if (e.key === 'Escape') {
+      if (startMenu) { closeStartMenu(); e.preventDefault(); return; }
       if (openMenu) { closeMenu(); e.preventDefault(); return; }
       var r = activeId ? windows[activeId] : null;
       if (r && r.fullscreen) { toggleFullscreen(activeId); e.preventDefault(); }
@@ -2013,6 +2578,7 @@
     if (e.altKey && k === 'h') hideOthers();
     else if (e.shiftKey && k === 'a') openAppManager();
     else if (e.shiftKey && k === 'z') postToApp('redo');
+    else if (k === ' ') { toggleStartMenu(); }        // ⌘␣ 开始菜单
     else if (k === '`') cycleWindows(e.shiftKey ? -1 : 1);
     else if (k === 'o') openLauncher();
     else if (k === 'w') { if (activeId) closeWindow(activeId); else handled = false; }
@@ -2048,39 +2614,246 @@
     if (r2) showToast(appTitle(r2.app), 1100);
   }
 
-  /* 点到空白处：关菜单 + 取消图标选中 */
+  /* 点到空白处：关菜单 + 关开始菜单 + 取消图标选中 */
   root.addEventListener('mousedown', function (e) {
-    if (!e.target.closest || !e.target.closest('.rx-menu')) closeMenu();
-    if (!e.target.closest || !e.target.closest('.rx-icon')) selectIcon(null);
+    var t = e.target;
+    if (!t.closest || !t.closest('.rx-menu')) closeMenu();
+    if (!t.closest || !t.closest('.rx-start, .rx-start-btn')) closeStartMenu();
+    if (!t.closest || !t.closest('.rx-icon')) selectIcon(null);
   });
-  window.addEventListener('blur', closeMenu);
+  window.addEventListener('blur', function () { closeMenu(); closeStartMenu(); });
 
   /* 桌面空白处右键 = 桌面菜单 */
   surface.addEventListener('contextmenu', function (e) {
     if (e.target.closest && e.target.closest('.rx-window')) return;
     e.preventDefault();
     selectIcon(null);
-    openContextMenu(e.clientX, e.clientY, desktopMenuItems());
+    var p = pointOfPhysical(e);
+    openContextMenu(p.x, p.y, desktopMenuItems());
   });
+  /* 触屏长按桌面空白 = 桌面菜单（手机端的右键等价物） */
+  bindLongPress(surface, function (x, y) {
+    selectIcon(null);
+    openContextMenu(x, y, desktopMenuItems());
+  }, { when: function () { return !longPressMute && !dragState && !iconDragActive; } });
+  /* 长按在「已经在窗口里的内容区」时不弹桌面菜单 —— 应用自己的长按要能用 */
+  surface.addEventListener('touchstart', function (e) {
+    if (e.target.closest && e.target.closest('.rx-window, .rx-dock')) longPressMute = true;
+    else longPressMute = false;
+  }, { passive: true, capture: true });
   /* 双击桌面空白 = 打开应用启动器 */
   surface.addEventListener('dblclick', function (e) {
     if (e.target.closest && e.target.closest('.rx-icon, .rx-window')) return;
     openLauncher();
   });
 
-  /** 把菜单放到鼠标位置（右键上下文） */
-  function openContextMenu(cx, cy, items) {
+  /* ═══════════════════════════════════════════════════════════════════
+   * 开始菜单
+   *
+   * 一个操作系统基本都要有的东西：应用总入口 + 系统级命令。
+   * 与菜单栏的分工（不重复造轮子）：
+   *   · 菜单栏 = **当前窗口**的命令（文件/编辑/显示/窗口）
+   *   · 开始菜单 = **整个系统**的命令（开应用 / 设置 / 关于 / 退出）
+   *
+   * 交互按「键盘优先、指针友好」来做（§1.3）：打开即聚焦搜索框，
+   * ↑↓ 移动选中项、Enter 打开、Esc 关闭、点外部关闭。
+   * ═══════════════════════════════════════════════════════════════════ */
+  var startMenu = null;     // 当前展开的开始菜单元素
+  var startIndex = -1;      // 键盘选中的行（-1 = 未选）
+
+  function startMenuOpen() { return !!startMenu; }
+
+  function closeStartMenu() {
+    if (!startMenu) return;
+    startMenu.remove();
+    startMenu = null;
+    startIndex = -1;
+    startBtn.setAttribute('aria-expanded', 'false');
+  }
+
+  function toggleStartMenu() {
+    if (startMenu) closeStartMenu();
+    else openStartMenu();
+  }
+
+  /** 开始菜单里列出的应用（含「没在运行」的，因为这就是启动入口） */
+  function startApps(needle) {
+    var q = (needle || '').trim().toLowerCase();
+    return apps.filter(function (a) {
+      if (!q) return true;
+      return (appTitle(a) + ' ' + a.name).toLowerCase().indexOf(q) >= 0;
+    });
+  }
+
+  function openStartMenu() {
+    closeMenu();            // 菜单栏与开始菜单互斥，别叠两张
+    closeStartMenu();
+
+    var m = el('div', 'rx-start rx-material-thick');
+    m.setAttribute('role', 'dialog');
+    m.setAttribute('aria-label', '开始菜单');
+
+    // ── 头：搜索 ──
+    var head = el('div', 'rx-start-head');
+    var search = el('input', 'rx-start-search');
+    search.type = 'search';
+    search.placeholder = '搜索应用…';
+    search.setAttribute('aria-label', '搜索应用');
+    head.appendChild(search);
+    m.appendChild(head);
+
+    // ── 列表 ──
+    var list = el('div', 'rx-start-list');
+    list.setAttribute('role', 'listbox');
+    m.appendChild(list);
+
+    // ── 脚：设置 / 关于 / 退出 ──
+    var foot = el('div', 'rx-start-foot');
+    [
+      { label: '设置', glyph: '⚙', act: function () { closeStartMenu(); openSettings(); } },
+      { label: '关于', glyph: 'ⓘ', act: function () { closeStartMenu(); showAbout(); } },
+      { label: '退出桌面', glyph: '⏻', act: function () {
+          closeStartMenu();
+          confirmAction('退出桌面', '桌面外壳会从页面上移除（内核继续运行）。按 F5 即可重新进入。', function () {
+            root.remove(); location.reload();
+          });
+        } },
+    ].forEach(function (it) {
+      var b = el('button', 'rx-menu-item');
+      b.setAttribute('role', 'menuitem');
+      b.appendChild(el('span', 'rx-menu-glyph', it.glyph));
+      b.appendChild(el('span', 'rx-menu-label', it.label));
+      b.addEventListener('click', function (e) { e.stopPropagation(); it.act(); });
+      foot.appendChild(b);
+    });
+    m.appendChild(foot);
+
+    var rows = [];          // 当前可见的行，供键盘导航
+
+    function draw() {
+      list.textContent = '';
+      rows = [];
+      var hit = startApps(search.value);
+      if (!hit.length) {
+        list.appendChild(el('div', 'rx-start-empty', '没有匹配的应用'));
+        startIndex = -1;
+        return;
+      }
+      hit.forEach(function (a) {
+        var b = el('button', 'rx-start-app');
+        b.setAttribute('role', 'option');
+        b.setAttribute('aria-selected', 'false');
+
+        var url = appIconUrl(a);
+        if (url) {
+          var img = el('img', 'rx-start-ico');
+          img.src = url; img.alt = ''; img.draggable = false;
+          img.addEventListener('error', function () {
+            if (img.parentNode) img.parentNode.replaceChild(el('span', 'rx-start-ico', '📦'), img);
+          });
+          b.appendChild(img);
+        } else {
+          b.appendChild(el('span', 'rx-start-ico', '📦'));
+        }
+
+        var meta = el('div', 'rx-start-meta');
+        meta.appendChild(el('span', 'rx-start-name', appTitle(a)));
+        meta.appendChild(el('span', 'rx-start-sub', a.type === 'node' ? ('node · :' + a.port) : 'web'));
+        b.appendChild(meta);
+
+        var on = isRunning(a);
+        var st = el('span', 'rx-start-state', on ? '运行中' : '已停止');
+        st.dataset.on = on ? '1' : '0';
+        b.appendChild(st);
+
+        if (windows[winId(a.name)]) b.dataset.active = '1';
+
+        b.addEventListener('click', function () { closeStartMenu(); openApp(a.name); });
+        b.addEventListener('mousemove', function () { setStartIndex(rows.indexOf(b)); });
+        list.appendChild(b);
+        rows.push(b);
+      });
+      // 重绘后保持选中项在范围内（搜索框每敲一个字都会重绘）
+      if (startIndex >= rows.length) startIndex = rows.length - 1;
+      setStartIndex(startIndex);
+    }
+
+    function setStartIndex(i) {
+      startIndex = i;
+      rows.forEach(function (r, k) {
+        r.setAttribute('aria-selected', k === i ? 'true' : 'false');
+      });
+    }
+
+    function move(d) {
+      if (!rows.length) return;
+      var n = startIndex < 0 ? (d > 0 ? 0 : rows.length - 1)
+        : (startIndex + d + rows.length) % rows.length;
+      setStartIndex(n);
+      if (rows[n] && rows[n].scrollIntoView) rows[n].scrollIntoView({ block: 'nearest' });
+    }
+
+    function onKey(e) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); move(1); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); move(-1); }
+      else if (e.key === 'Enter') {
+        e.preventDefault(); e.stopPropagation();
+        if (startIndex >= 0 && rows[startIndex]) rows[startIndex].click();
+        else if (rows[0]) rows[0].click();
+      } else if (e.key === 'Escape') {
+        e.preventDefault(); e.stopPropagation();
+        closeStartMenu();
+      }
+    }
+
+    search.addEventListener('input', function () { startIndex = -1; draw(); });
+    search.addEventListener('keydown', onKey);
+    m.addEventListener('keydown', onKey);
+    m.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+
+    root.appendChild(m);
+    startMenu = m;
+    startBtn.setAttribute('aria-expanded', 'true');
+    draw();
+    // 进场动画用 data-anim 触发，动画结束后摘掉属性，
+    // 否则下次打开时属性已在、动画不会重播。
+    m.dataset.anim = 'in';
+    m.addEventListener('animationend', function () { delete m.dataset.anim; }, { once: true });
+    setTimeout(function () { if (startMenu === m) search.focus(); }, 20);
+  }
+
+  startBtn.addEventListener('click', function (e) {
+    e.stopPropagation();
+    toggleStartMenu();
+  });
+
+  /**
+   * 把菜单放到指针位置（右键 / 触屏长按共用）。
+   *
+   * ⚠ 传入的必须是**屏幕坐标**（e.clientX / e.clientY）：菜单是挂到宿主
+   * #runx-desktop 上的，不随 vscreen 缩放，所以定位要用物理像素。
+   * 缩放 ≠1 时若直接拿逻辑坐标定 left/top，菜单会飘到桌面外。
+   */
+  function openContextMenu(px_, py_, items) {
     closeMenu();
     var m = buildMenu(items);
     m.dataset.rootLabel = '__ctx';
-    m.style.left = px(clamp(cx, 6, viewport().w - 216));
-    m.style.top = px(clamp(cy, 6, viewport().h - 200));
     m.classList.add('rx-menu-ctx');
+    // 先挂上去再量尺寸，否则 getBoundingClientRect 拿不到真实宽高
+    m.style.visibility = 'hidden';
     root.appendChild(m);
-    openMenu = m;
+
+    var vw = physViewport().w, vh = physViewport().h;
     var r = m.getBoundingClientRect();
-    if (r.right > viewport().w - 6) m.style.left = px(Math.max(6, viewport().w - r.width - 6));
-    if (r.bottom > viewport().h - 6) m.style.top = px(Math.max(6, viewport().h - r.height - 6));
+
+    // 右下越界就翻到指针另一侧，始终保证整张菜单可见（手机屏幕小，很常见）
+    var left = px_ + r.width > vw - 6 ? px_ - r.width : px_;
+    var top = py_ + r.height > vh - 6 ? py_ - r.height : py_;
+    m.style.left = px(clamp(left, 6, Math.max(6, vw - r.width - 6)));
+    m.style.top = px(clamp(top, 6, Math.max(6, vh - r.height - 6)));
+    m.style.visibility = '';
+
+    openMenu = m;
   }
 
   /* ═══════════════════════════════════════════════════════════════════
@@ -2090,6 +2863,9 @@
   window.addEventListener('resize', function () {
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(function () {
+      // 先重算虚拟显示器的缩放与居中（手机上旋屏后 scale 会变），
+      // 再按新的可用区夹取窗口 —— 顺序反了会用旧坐标系算出错误位置。
+      applyDisplay();
       var wa = workArea();
       order.forEach(function (id) {
         var rec = windows[id];
@@ -2130,6 +2906,7 @@
   function render() {
     applyTheme();
     applyWallpaper();
+    applyDisplay();          // 必须在渲染图标/窗口之前：它定下逻辑坐标系
     renderIcons();
     renderDock();
     renderMenus();
@@ -2161,12 +2938,30 @@
   });
 
   // 暴露一点调试接口（控制台里 `__runx.windows` 很顺手）
+  //
+  // 注意 open/close 的参数口径不同：open 收**应用名**（'term'），而窗口记录的
+  // key 是 winId = 'win-' + 应用名。close 两者都收 —— 传 'term' 或 'win-term'
+  // 都行，免得在控制台里 `__runx.close('term')` 静默无效（windows['term']
+  // 是 undefined，closeWindow 直接 return，什么都不发生，很难发现）。
+  function resolveWinId(nameOrId) {
+    if (!nameOrId) return null;
+    if (windows[nameOrId]) return nameOrId;
+    var byApp = winId(nameOrId);
+    if (windows[byApp]) return byApp;
+    return nameOrId;
+  }
   window.__runx = {
     get windows() { return windows; },
     get apps() { return apps; },
     get cfg() { return cfg; },
     open: openApp,
-    close: closeWindow,
+    close: function (nameOrId) { return closeWindow(resolveWinId(nameOrId)); },
+    focus: function (nameOrId) {
+      var id = resolveWinId(nameOrId);
+      if (!windows[id]) return false;
+      if (windows[id].hidden || windows[id].minimized) showWindow(id); else focusWindow(id);
+      return true;
+    },
     showAll: showAll,
     hideOthers: hideOthers,
     tidy: tidyIcons,
@@ -2175,5 +2970,13 @@
     // __runx.saveWindows() 立刻落盘。
     winSnapshot: winSnapshot,
     saveWindows: saveWindowsNow,
+    // 外观与显示：控制台里换主题/强调色/分辨率很方便
+    start: openStartMenu,
+    theme: setTheme,
+    accent: setAccent,
+    wallpaper: setWallpaper,
+    display: setDisplay,
+    windowDefaults: setWindowDefaults,
+    applyDisplay: applyDisplay,
   };
 })();
