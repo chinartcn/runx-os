@@ -46,6 +46,53 @@ const WIDGET_FIELDS = ['x', 'y', 'w', 'h', 'config'];
 const TASKBAR_POSITIONS = ['top', 'bottom', 'left', 'right'];
 const THEMES = ['light', 'dark', 'auto'];
 
+/**
+ * 强调色（§2.2 Accent Color）：给出若干预设，而不是让用户随便填色 ——
+ * 随便填的色会和语义红/绿/黄撞车（用户把强调色设成红色，就看不出「危险」了），
+ * 也没法保证在浅色与深色底上都有足够对比度。预设值都经过两套底色校验。
+ */
+const ACCENTS = {
+  blue:   { light: '#0a6cff', dark: '#4a9eff', label: '蓝色' },
+  purple: { light: '#7c3aed', dark: '#a78bfa', label: '紫色' },
+  pink:   { light: '#db2777', dark: '#f472b6', label: '粉色' },
+  red:    { light: '#d70015', dark: '#ff6b63', label: '红色' },
+  orange: { light: '#c2410c', dark: '#fb923c', label: '橙色' },
+  yellow: { light: '#a16207', dark: '#fbbf24', label: '黄色' },
+  green:  { light: '#15803d', dark: '#4ade80', label: '绿色' },
+  graphite:{ light: '#5b6470', dark: '#9aa4b2', label: '石墨' },
+};
+
+/** 内置壁纸：全部是零请求的 CSS 渐变，手机上也秒开 */
+const WALLPAPERS = [
+  { id: 'aurora',  label: '极光' },
+  { id: 'sunset',  label: '日落' },
+  { id: 'ocean',   label: '深海' },
+  { id: 'forest',  label: '森林' },
+  { id: 'mono',    label: '石墨' },
+  { id: 'paper',   label: '宣纸' },
+];
+
+/**
+ * 桌面分辨率预设。
+ *
+ * 语义是「虚拟显示器分辨率」：桌面渲染在一个固定尺寸的坐标系里，再用
+ * transform 等比缩放到实际视口。这样手机上也能看到「1280×800 的桌面布局」，
+ * 窗口摆位在不同设备上保持一致 —— 而不是各自排一套。
+ *
+ * scale: 'fit' 表示按视口自动等比缩放（推荐）；给数字则强制该倍率。
+ */
+const DISPLAY_PRESETS = [
+  { id: 'auto',   label: '自适应',   w: 0,    h: 0,    scale: 'fit' },
+  { id: 'laptop', label: '1280×800', w: 1280, h: 800,  scale: 'fit' },
+  { id: 'fhd',    label: '1920×1080', w: 1920, h: 1080, scale: 'fit' },
+  { id: 'tablet', label: '1024×768',  w: 1024, h: 768,  scale: 'fit' },
+  { id: 'phone',  label: '414×896',   w: 414,  h: 896,  scale: 'fit' },
+  { id: 'ultra',  label: '2560×1440', w: 2560, h: 1440, scale: 'fit' },
+];
+
+/** 新窗口默认尺寸预设（相对可用工作区） */
+const WIN_DEFAULT_PRESETS = ['cascade', 'center', 'halfRight', 'halfLeft', 'quarter', 'large'];
+
 function newId() { return (crypto.randomUUID ? crypto.randomUUID() : 'c' + Date.now() + Math.random().toString(16).slice(2)).slice(0, 26); }
 function json(status, obj) {
   return { status, type: 'application/json; charset=utf-8', body: JSON.stringify(obj) };
@@ -85,9 +132,14 @@ function defaultDesktop() {
     schema: 1, updated_at: Date.now(),
     wallpaper: { type: 'builtin', id: 'aurora' },
     theme: 'auto',
+    accent: 'blue',
     grid: { cell: 96, gap: 8 },
     icons: [], widgets: [],
     taskbar: { position: 'bottom', pinned: [], show_clock: true },
+    // 虚拟显示器分辨率与缩放
+    display: { preset: 'auto', w: 0, h: 0, scale: 'fit' },
+    // 新窗口打开时的默认几何
+    windowDefaults: { preset: 'cascade', w: 860, h: 580 },
     // windows：窗口几何的会话存档（供刷新后恢复）。
     // 只存「哪个 app 的窗口在哪、多大、是不是最大化/全屏」，不存窗口内容。
     windows: [],
@@ -217,6 +269,79 @@ module.exports = {
       save(d);
       return d.taskbar;
     }
+
+    /** 强调色：只接受预设名，不接受任意色值（理由见 ACCENTS 注释） */
+    function setAccent(body) {
+      const d = load();
+      const name = body && body.accent;
+      if (!Object.prototype.hasOwnProperty.call(ACCENTS, name)) {
+        throw new Error('accent 必须是预设名：' + Object.keys(ACCENTS).join(' / '));
+      }
+      d.accent = name;
+      save(d);
+      return { accent: d.accent };
+    }
+
+    /**
+     * 虚拟显示器分辨率。
+     * preset 命中 DISPLAY_PRESETS 时按预设；preset === 'custom' 用 body.w/h。
+     * 自定义尺寸夹到 [320, 5120]×[240, 2880]（手机到 5K 都能覆盖），
+     * scale 允许 'fit' 或 0.25–3 的数字。
+     */
+    function setDisplay(body) {
+      const d = load();
+      const b = body || {};
+      const cur = d.display || { preset: 'auto', w: 0, h: 0, scale: 'fit' };
+      const clampNum = (v, min, max, dflt) => {
+        const n = Number(v);
+        return Number.isFinite(n) ? Math.min(max, Math.max(min, Math.round(n))) : dflt;
+      };
+      let preset = b.preset != null ? String(b.preset) : cur.preset;
+      const hit = DISPLAY_PRESETS.find((p) => p.id === preset);
+      if (hit) {
+        cur.preset = hit.id;
+        cur.w = hit.w; cur.h = hit.h;
+        // 预设的 scale 是 fit；除非显式要求自定义倍率
+        cur.scale = b.scale != null ? normScale(b.scale, hit.scale) : hit.scale;
+      } else if (preset === 'custom') {
+        cur.preset = 'custom';
+        cur.w = clampNum(b.w != null ? b.w : cur.w, 320, 5120, 1280);
+        cur.h = clampNum(b.h != null ? b.h : cur.h, 240, 2880, 800);
+        cur.scale = normScale(b.scale != null ? b.scale : cur.scale, 'fit');
+      } else {
+        throw new Error('display.preset 非法：' + preset);
+      }
+      d.display = cur;
+      save(d);
+      return cur;
+    }
+    function normScale(v, dflt) {
+      if (v === 'fit') return 'fit';
+      const n = Number(v);
+      return Number.isFinite(n) ? Math.min(3, Math.max(0.25, Math.round(n * 100) / 100)) : dflt;
+    }
+
+    /** 新窗口默认几何 */
+    function setWindowDefaults(body) {
+      const d = load();
+      const b = body || {};
+      const cur = d.windowDefaults || { preset: 'cascade', w: 860, h: 580 };
+      if (b.preset != null) {
+        if (!WIN_DEFAULT_PRESETS.includes(b.preset)) {
+          throw new Error('windowDefaults.preset 非法：' + b.preset);
+        }
+        cur.preset = b.preset;
+      }
+      const clampNum = (v, min, max, dflt) => {
+        const n = Number(v);
+        return Number.isFinite(n) ? Math.min(max, Math.max(min, Math.round(n))) : dflt;
+      };
+      if (b.w != null) cur.w = clampNum(b.w, 280, 5120, 860);
+      if (b.h != null) cur.h = clampNum(b.h, 180, 2880, 580);
+      d.windowDefaults = cur;
+      save(d);
+      return cur;
+    }
     /** 网格尺寸：cell 是单元格边长，gap 是单元格间距（两者之和＝步长） */
     function setGrid(body) {
       const d = load();
@@ -300,7 +425,14 @@ module.exports = {
         assets_base: ASSETS_PREFIX,
         version: pkgVersion,
         // 客户端能力位：UI 层据此决定是否渲染扩展面板（现在只有基础外壳）
-        capabilities: ['windows.drag', 'windows.resize', 'windows.fullscreen', 'windows.persist', 'menubar', 'toolbar'],
+        capabilities: ['windows.drag', 'windows.resize', 'windows.fullscreen', 'windows.persist',
+          'menubar', 'toolbar', 'startmenu', 'longpress', 'accent', 'display', 'windowdefaults'],
+        // 外观与显示的枚举值由服务端下发：客户端不硬编码，
+        // 以后加一个壁纸/强调色只改服务端一处。
+        accents: Object.keys(ACCENTS).map((k) => ({ id: k, label: ACCENTS[k].label })),
+        wallpapers: WALLPAPERS,
+        display_presets: DISPLAY_PRESETS,
+        window_default_presets: WIN_DEFAULT_PRESETS,
       };
     }
 
@@ -308,6 +440,10 @@ module.exports = {
       json, err, load, save, addIcon, patchIcon, delIcon,
       addWidget, patchWidget, delWidget, setWallpaper, setTheme, setTaskbar, setGrid, meta,
       setWindows, delWindow,
+      // 本轮新增：外观与显示
+      setAccent, setDisplay, setWindowDefaults,
+      accents: ACCENTS, wallpapers: WALLPAPERS,
+      displayPresets: DISPLAY_PRESETS, windowDefaultPresets: WIN_DEFAULT_PRESETS,
     };
 
     /* ── 前端资源：把扩展目录里白名单内的文件按正确 MIME 发出去 ──
@@ -416,6 +552,22 @@ module.exports = {
     if (req.method === 'PUT' && p === API + '/desktop/theme') {
       return Promise.resolve(ctx.readJson().catch(() => ({}))).then((b) => {
         try { return S.json(200, S.setTheme(b)); } catch (e) { return S.err(422, e.message); }
+      });
+    }
+    /* 外观与显示 */
+    if (req.method === 'PUT' && p === API + '/desktop/accent') {
+      return Promise.resolve(ctx.readJson().catch(() => ({}))).then((b) => {
+        try { return S.json(200, S.setAccent(b)); } catch (e) { return S.err(422, e.message); }
+      });
+    }
+    if (req.method === 'PUT' && p === API + '/desktop/display') {
+      return Promise.resolve(ctx.readJson().catch(() => ({}))).then((b) => {
+        try { return S.json(200, S.setDisplay(b)); } catch (e) { return S.err(422, e.message); }
+      });
+    }
+    if (req.method === 'PUT' && p === API + '/desktop/window-defaults') {
+      return Promise.resolve(ctx.readJson().catch(() => ({}))).then((b) => {
+        try { return S.json(200, S.setWindowDefaults(b)); } catch (e) { return S.err(422, e.message); }
       });
     }
     /* 窗口几何：整体覆盖式写入（客户端持有全部窗口状态，这里只做校验与落盘） */
