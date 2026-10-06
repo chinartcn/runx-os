@@ -88,6 +88,9 @@ function defaultDesktop() {
     grid: { cell: 96, gap: 8 },
     icons: [], widgets: [],
     taskbar: { position: 'bottom', pinned: [], show_clock: true },
+    // windows：窗口几何的会话存档（供刷新后恢复）。
+    // 只存「哪个 app 的窗口在哪、多大、是不是最大化/全屏」，不存窗口内容。
+    windows: [],
   };
 }
 function nextFreeCell(d) {
@@ -229,6 +232,64 @@ module.exports = {
       return d.grid;
     }
 
+    /**
+     * 窗口几何存档（§3.1 窗口可移动/缩放 —— 关掉浏览器再回来应该还在原处）。
+     *
+     * 只收「安全子集」，客户端传什么脏数据都不会写进状态文件：
+     *   · app     必填，字符串，长度上限 64（要能对上 apps.json 里的名字）
+     *   · x/y/w/h 数字，夹到合理范围（负数允许，多屏/贴边场景合法）
+     *   · minimized / maximized / fullscreen  布尔
+     *   · toolbarStyle  仅 unified | unifiedCompact | expanded
+     *   · z       层级（可选），夹到 1..9999
+     *
+     * 数量上限 MAX_WINDOWS：桌面上真正能用的窗口不会超过这个数，
+     * 防止被伪造请求塞爆 desktop.json。
+     */
+    function setWindows(body) {
+      const d = load();
+      const list = (body && Array.isArray(body.windows)) ? body.windows : null;
+      if (!list) throw new Error('windows 必须是数组');
+
+      const NUM = (v, dflt, min, max) => {
+        const n = Number(v);
+        if (!Number.isFinite(n)) return dflt;
+        return Math.min(max, Math.max(min, Math.round(n)));
+      };
+      const out = [];
+      const seen = new Set();
+      for (const w of list) {
+        if (!w || typeof w.app !== 'string') continue;
+        const app = w.app.trim().slice(0, 64);
+        if (!app || seen.has(app)) continue;   // 同一 app 只留一条（RunX 里同应用单窗口）
+        seen.add(app);
+        const rec = {
+          app,
+          x: NUM(w.x, 0, -20000, 20000),
+          y: NUM(w.y, 0, -20000, 20000),
+          w: NUM(w.w, 760, 280, 20000),
+          h: NUM(w.h, 500, 180, 20000),
+          minimized: !!w.minimized,
+          maximized: !!w.maximized,
+          fullscreen: !!w.fullscreen,
+          toolbarStyle: ['unified', 'unifiedCompact', 'expanded'].includes(w.toolbarStyle)
+            ? w.toolbarStyle : 'unified',
+        };
+        if (w.z != null) rec.z = NUM(w.z, 1, 1, 9999);
+        out.push(rec);
+        if (out.length >= 24) break;   // MAX_WINDOWS
+      }
+      d.windows = out;
+      save(d);
+      return { windows: d.windows };
+    }
+    function delWindow(app) {
+      const d = load();
+      const name = String(app || '').trim();
+      d.windows = (d.windows || []).filter((w) => w.app !== name);
+      save(d);
+      return { ok: true, windows: d.windows };
+    }
+
     /* 桌面自述信息：客户端据此拼资源地址与版本（便于以后做热重载/灰度） */
     function meta() {
       const pkgVersion = (() => {
@@ -239,13 +300,14 @@ module.exports = {
         assets_base: ASSETS_PREFIX,
         version: pkgVersion,
         // 客户端能力位：UI 层据此决定是否渲染扩展面板（现在只有基础外壳）
-        capabilities: ['windows.drag', 'windows.resize', 'windows.fullscreen', 'menubar', 'toolbar'],
+        capabilities: ['windows.drag', 'windows.resize', 'windows.fullscreen', 'windows.persist', 'menubar', 'toolbar'],
       };
     }
 
     S = {
       json, err, load, save, addIcon, patchIcon, delIcon,
       addWidget, patchWidget, delWidget, setWallpaper, setTheme, setTaskbar, setGrid, meta,
+      setWindows, delWindow,
     };
 
     /* ── 前端资源：把扩展目录里白名单内的文件按正确 MIME 发出去 ──
@@ -355,6 +417,16 @@ module.exports = {
       return Promise.resolve(ctx.readJson().catch(() => ({}))).then((b) => {
         try { return S.json(200, S.setTheme(b)); } catch (e) { return S.err(422, e.message); }
       });
+    }
+    /* 窗口几何：整体覆盖式写入（客户端持有全部窗口状态，这里只做校验与落盘） */
+    if (req.method === 'PUT' && p === API + '/desktop/windows') {
+      return Promise.resolve(ctx.readJson().catch(() => ({}))).then((b) => {
+        try { return S.json(200, S.setWindows(b)); } catch (e) { return S.err(422, e.message); }
+      });
+    }
+    if (req.method === 'DELETE' && p.startsWith(API + '/desktop/windows/')) {
+      const app = decodeURIComponent(p.slice((API + '/desktop/windows/').length));
+      try { return S.json(200, S.delWindow(app)); } catch (e) { return S.err(422, e.message); }
     }
     if (req.method === 'PUT' && p === API + '/desktop/taskbar') {
       return Promise.resolve(ctx.readJson().catch(() => ({}))).then((b) => {
