@@ -1,8 +1,27 @@
 # RunX OS
 
-一个跑在浏览器里的**网页桌面操作系统**：基于 [NavExt](https://github.com/chinartcn/NavExt)（零依赖 Node.js 静态导航服务器 v2.8.0）改造的内核，叠加一组核心扩展，构成可安装、可托管 Web/Node 应用的桌面环境。
+一个跑在浏览器里的**网页桌面操作系统**：基于 [NavExt](https://github.com/chinartcn/NavExt)（零依赖 Node.js 静态导航服务器 v2.8.3）改造的内核，叠加一组核心扩展，构成可安装、可托管 Web/Node 应用的桌面环境。
 
 > 零运行时依赖。不需要 `npm install`、不需要编译原生模块。只要一台装了 Node.js 的机器（手机 / 平板 / 树莓派 / 服务器均可），`node server.js` 就能起来。
+
+---
+
+## 与 NavExt 版本的关系
+
+从 NavExt **v2.8.3** 起，内置的**导航页（展示页）已从内核剥离**，降级为可选扩展 `.js/navext-ui/`。
+没装该扩展时，内核按三层顺序回退：
+
+| 顺序 | 条件 | 行为 |
+|:---:|---|---|
+| ① | 站点根目录存在 `index.html` | 服务该文件，**照常注入扩展**（`navext-client`、`__NAV_DATA__`） |
+| ② | 没有 `index.html` | HTTP 200 + `Content-Length: 0`（零字节空页面） |
+| ③ | — | 其他扩展在任何情况下都照常加载 |
+
+**RunX OS 有意保留根目录的 `index.html`，走第 ① 层。** 原因很直接：RunX 桌面客户端（`.js/@runx-desktop/client.js`）依赖内核把 `navext-client` 脚本注入页面才能启动，而零字节页面没有 `<head>` 可供注入 —— 实测会落到「桌面完全不挂载」（`#runx-desktop` 不存在）。
+
+`index.html` 只是 619 字节的启动占位（一行"正在启动 RunX OS 桌面…"），真正的桌面由扩展在客户端动态挂载。删掉它桌面就会消失。
+
+另外，`/?format=json` 与 `/api/search` 是展示页的数据源，无展示页扩展时按设计**降级为 404**；RunX OS 不使用这两个接口。
 
 ---
 
@@ -395,9 +414,9 @@ ETag 304 协商。内联的 CSS 在导出前会把相对 `url()` 改写成绝对
 
 ## 致谢 / 许可
 
-- 内核改造自 [NavExt](https://github.com/chinartcn/NavExt)（MIT）。
+- 内核改造自 [NavExt](https://github.com/chinartcn/NavExt)（MIT），当前基线 **v2.8.3**。
 - 本项目版权归 chinartcn，采用 **MIT 许可**。
 
 ```
-RunX OS = NavExt（内核）+ os.js（特权层）+ 5 个核心扩展 + 应用层
+RunX OS = NavExt v2.8.3（内核）+ os.js（特权层）+ 5 个核心扩展 + 应用层
 ```
