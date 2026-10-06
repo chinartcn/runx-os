@@ -150,9 +150,12 @@ async function doResize(conn, msg) {
 
   // script 无法动态改 PTY 尺寸 → 重建会话（保留 id 与前端 scrollback）
   await sessions.respawn(s.id, cols, rows);
-  const note = '\r\n\x1b[2m── 已按 ' + s.cols + 'x' + s.rows + ' 重建会话（前台程序已重启）──\x1b[0m\r\n';
-  broadcast(s.id, { type: 'output', sessionId: s.id, data_b64: Buffer.from(note, 'utf8').toString('base64'), seq: ++s.seq });
-  broadcast(s.id, { type: 'resized', sessionId: s.id, cols: s.cols, rows: s.rows });
+  // 重建提示不再写进终端（避免污染 shell 输出 / scrollback），改为随 resized
+  // 下发 note 字段，由前端在终端区域的浮层（#hint）里显示。
+  broadcast(s.id, {
+    type: 'resized', sessionId: s.id, cols: s.cols, rows: s.rows,
+    note: '已按 ' + s.cols + '×' + s.rows + ' 重建会话（前台程序已重启）',
+  });
 }
 
 function doClose(conn, msg) {
