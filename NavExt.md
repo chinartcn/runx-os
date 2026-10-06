@@ -126,6 +126,18 @@ node build.js
 
 server.dist.js 就是 server.js 加上内联的客户端库，逻辑完全一样。对方只需 node server.dist.js，不需要 .navext.client.js。
 
+要打成完整分发包（含 `install.js`、`.js/` 扩展、站点文件）：
+
+```bash
+node build.js --pack            # 产物 app.tar.gz（默认带内置展示页）
+node build.js --pack --no-ui-ext # 不带展示页，部署后用 install.js 补装
+```
+
+> **展示页是可选的（v2.8.3）**：导航页已降级为扩展 `.js/navext-ui/`。
+> 不带它时，`/` 会服务站点的 `index.html`，没有则返回 200 + 0 字节空页面；
+> 其他扩展照常加载。部署后随时 `node install.js` 安装。
+
+
 ---
 
 ## 目录结构
@@ -537,6 +549,13 @@ module.exports = {
     return html;
   },
 
+  // 提供导航页（展示页）的 <body> 内容（v2.8.3 新增）
+  // 返回 { html } 则采用；返回 null 则让位给下一个扩展
+  onNavPage(ctx) {
+    const nav = ctx.nav;
+    return { html: '<main class="wrap">...</main>' };
+  },
+
   // 每个请求开始时调用（在路由前）
   // 返回对象则拦截并直接作为响应
   onRequest(req, url, ctx) {
@@ -560,12 +579,19 @@ module.exports = {
 | --- | --- | --- |
 | `onInit(ctx)` | 扩展加载后 | 无 |
 | `onFiles(files, ctx)` | 扫描完成后 | 数组则替换文件列表（**必须同步**） |
+| `onNavPage(ctx)` | **渲染导航页（展示页）时**（`v2.8.3` 新增） | `{ html }` 则作为 `<body>` 内容；`null` 则让位给下一个扩展 |
 | `onHtml(html, ctx)` | 页面 HTML 生成后 | 字符串则替换 HTML |
 | `onRequest(req, url, ctx)` | 路由分发前 | 对象则拦截响应（任意 HTTP 方法） |
 | `onResponse(info, ctx)` | 响应已发出后 | 无（只读观察者） |
 | `onError(err, ctx)` | 扩展钩子出错后 | 无 |
 | `onDispose(ctx)` | 扩展重载 / 禁用 / 关停 | 无（收尾清理，`v2.7.0` 新增） |
 | `stats()` | — | 返回统计数据，由 GET /api/extensions/:id/stats 读取 |
+
+> **导航页由扩展提供（v2.8.3）**：内置展示页已降级为可选扩展 `.js/navext-ui/`。
+> 没有任何扩展实现 `onNavPage` 时，`/` 会退化为服务根目录的 `index.html`，
+> 找不到则返回 **HTTP 200 + 0 字节空页面**（其他扩展照常加载）；
+> `/?format=json` 与 `/api/search` 也一并降级为 404。
+> 详见 [MD/06-主页与路由.md](MD/06-主页与路由.md)。
 
 onRequest 返回对象的结构：
 
@@ -587,6 +613,7 @@ ctx 上下文对象：
   root: '/path/to/root',             // 扫描根目录
   configPath: '/path/to/server.json',
   files,                             // onFiles / onHtml 时有
+  nav: { ... },                      // onNavPage 时有（只读快照：root/pathname/files/dirs/site/stats）
   config: { ... },                   // 合并后的配置值（默认值 + 用户覆盖）
   configSchema: [ ... ],             // schema 数组
   userConfig: { ... },               // 用户显式覆盖的部分
