@@ -111,6 +111,9 @@
     play: { inner: '<polygon points="6 3 20 12 6 21 6 3" />', vb: '0 0 24 24', sw: 2 },
     dot: { inner: '<circle cx="12" cy="12" r="5" fill="currentColor" stroke="none"/>', vb: '0 0 24 24', sw: 2 },
     stop: { inner: '<rect x="5" y="5" width="14" height="14" rx="2" fill="currentColor" stroke="none"/>', vb: '0 0 24 24', sw: 2 },
+    // ── RunX OS 品牌标识 ── 圆角方块（跟随强调色）+ 白色 X（RunX 的 X 签名）
+    runx: { inner: '<rect x="2" y="2" width="20" height="20" rx="6" fill="var(--accent)"/>' +
+                   '<path d="M7.6 7.6 16.4 16.4 M16.4 7.6 7.6 16.4" stroke="#fff" stroke-width="2.8" stroke-linecap="round" fill="none"/>', vb: '0 0 24 24', sw: 2 },
   };
 
   /** 时长归一化 —— 与内核 os.safeMs 同源思路：NaN 会让浏览器把定时器降级成 1ms */
@@ -209,25 +212,21 @@
   var badge = el('div', 'rx-vscreen-badge');
   root.appendChild(badge);
 
-  var brand = el('div', 'rx-brand');
-  var brandMark = el('div', 'rx-brand-mark', 'R');
+  /* 品牌标 = 开始菜单入口：点 RunX logo 打开开始菜单（原独立的网格开始
+     按钮已并入）。同时携带 rx-start-btn 类 —— 外部点击关闭逻辑与测试
+     选择器都依赖它。菜单栏管**当前窗口**，开始菜单管**整个系统**。 */
+  var brand = el('button', 'rx-brand rx-start-btn');
+  brand.setAttribute('type', 'button');
+  brand.setAttribute('aria-haspopup', 'true');
+  brand.setAttribute('aria-expanded', 'false');
+  brand.setAttribute('aria-label', '开始菜单');
+  brand.setAttribute('title', '开始菜单');
+  var brandMark = el('div', 'rx-brand-mark');
+  brandMark.appendChild(svgIcon(ICON.runx));
   var brandName = el('span', 'rx-brand-name', 'RunX OS');
   brand.appendChild(brandMark);
   brand.appendChild(brandName);
-  brand.setAttribute('title', 'RunX OS');
   menubar.appendChild(brand);
-
-  /* 开始按钮：整个系统的应用总入口。放在品牌名右侧、菜单栏之前 ——
-     与「菜单栏是命令总入口」并列，两者职责不同：菜单栏管**当前窗口**，
-     开始菜单管**整个系统**（开应用 / 设置 / 退出）。 */
-  var startBtn = el('button', 'rx-start-btn');
-  startBtn.setAttribute('type', 'button');
-  startBtn.setAttribute('aria-haspopup', 'true');
-  startBtn.setAttribute('aria-expanded', 'false');
-  startBtn.setAttribute('aria-label', '开始菜单');
-  startBtn.setAttribute('title', '开始菜单');
-  startBtn.appendChild(svgIcon(ICON.app));
-  menubar.appendChild(startBtn);
 
   var menuHost = el('div', 'rx-menu-roots');
   menuHost.style.cssText = 'display:flex;align-items:center;gap:2px;min-width:0';
@@ -1599,7 +1598,7 @@
     var rec = activeId ? windows[activeId] : null;
     var hasWin = !!rec;
     var disabled = !hasWin;
-    var name = rec ? appTitle(rec.app) : 'RunX OS';
+    var name = rec ? appTitle(rec.app) : '桌面';
 
     var appMenu = [
       { label: '关于 RunX OS', glyph: 'info', act: showAbout },
@@ -1854,7 +1853,7 @@
     var items = [
       { label: '新建终端窗口', glyph: 'terminal', act: function () { openApp('term'); } },
       { label: '打开应用…', glyph: 'external', key: '⌘O', act: openLauncher },
-      { label: '开始菜单', glyph: 'app', key: '⌘␣', act: openStartMenu },
+      { label: '开始菜单', glyph: 'runx', key: '⌘␣', act: openStartMenu },
       { sep: true },
       { label: '整理图标', glyph: 'grid', act: tidyIcons },
       { label: '显示全部窗口', act: showAll },
@@ -2083,6 +2082,20 @@
 
   function showAbout() {
     var body = el('div');
+    var head = el('div');
+    head.style.cssText = 'display:flex;align-items:center;gap:12px;margin:0 0 12px';
+    var logo = svgIcon(ICON.runx);
+    logo.setAttribute('width', '48'); logo.setAttribute('height', '48');
+    logo.style.borderRadius = '12px';
+    logo.style.filter = 'drop-shadow(0 3px 8px color-mix(in srgb, var(--accent) 38%, transparent))';
+    head.appendChild(logo);
+    var titles = el('div');
+    titles.appendChild(el('div', null, 'RunX OS')).style.cssText = 'font:var(--font-title);font-weight:700;font-size:19px;letter-spacing:-0.01em';
+    var sub = el('div', null, '基于 NavExt 内核的网页桌面操作系统');
+    sub.style.cssText = 'font:var(--font-caption);color:var(--label-secondary);margin-top:2px';
+    titles.appendChild(sub);
+    head.appendChild(titles);
+    body.appendChild(head);
     var p1 = el('p', 'body');
     p1.style.cssText = 'margin:0 0 10px;color:var(--label-secondary)';
     p1.textContent = 'RunX OS —— 基于 NavExt 内核改造的网页桌面操作系统：' +
@@ -2758,7 +2771,7 @@
     startMenu.remove();
     startMenu = null;
     startIndex = -1;
-    startBtn.setAttribute('aria-expanded', 'false');
+    brand.setAttribute('aria-expanded', 'false');
   }
 
   function toggleStartMenu() {
@@ -2903,7 +2916,7 @@
 
     root.appendChild(m);
     startMenu = m;
-    startBtn.setAttribute('aria-expanded', 'true');
+    brand.setAttribute('aria-expanded', 'true');
     draw();
     // 进场动画用 data-anim 触发，动画结束后摘掉属性，
     // 否则下次打开时属性已在、动画不会重播。
@@ -2912,7 +2925,7 @@
     setTimeout(function () { if (startMenu === m) search.focus(); }, 20);
   }
 
-  startBtn.addEventListener('click', function (e) {
+  brand.addEventListener('click', function (e) {
     e.stopPropagation();
     toggleStartMenu();
   });
