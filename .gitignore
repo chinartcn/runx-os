@@ -1,6 +1,9 @@
 # 运行时状态（由 start.sh / 内核写入，不入库）
 /var/
 
+# 扩展配置的用户值（由 /api/extensions/:id/config 写入，随用户而异）
+/.js/config.json
+
 # 日志
 *.log
 
