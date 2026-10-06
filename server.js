@@ -102,7 +102,7 @@ const vm = require('vm');
 const OS = require('./os');
 
 /** 服务端版本 —— 会通过 __NAV_DATA__ 传给客户端 */
-const SERVER_VERSION = '2.8.2';
+const SERVER_VERSION = '2.8.3';
 
 /** 客户端库路径 —— 与 server.js 同目录，文件名以 . 开头，静态路由自动拒绝 */
 const NAVEXT_CLIENT_PATH = path.join(__dirname, '.navext.client.js');
@@ -2677,85 +2677,6 @@ function loadNavExtClient() {
  *  [11] 渲染层 —— renderNav / buildHtml
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-/** 渲染单个卡片 */
-function renderCard(f) {
-  const display = f.title || f.name;
-  const hasCustomTitle = Boolean(f.title) && f.title !== f.name;
-
-  const descHtml = f.description
-    ? `<span class="fdesc" data-ext-target="card-desc">${escapeHtml(f.description)}</span>`
-    : '';
-
-  const pathHtml = hasCustomTitle
-    ? `<span class="fpath" data-ext-target="card-path">${escapeHtml(f.name)}</span>`
-    : '';
-
-  const keyStr = [f.rel, f.name, f.title, f.description]
-    .filter(Boolean).join(' ').toLowerCase();
-
-  return `<a class="card" href="/${encodePath(f.rel)}" target="_blank" rel="noopener"
-   data-ext-target="card"
-   data-ext-file="${escapeHtml(f.name)}"
-   data-ext-path="${escapeHtml(f.rel)}"
-   data-ext-dir="${escapeHtml(f.dir || '')}"
-   data-ext-title="${escapeHtml(f.title || '')}"
-   data-ext-desc="${escapeHtml(f.description || '')}"
-   data-ext-size="${f.size}"
-   data-ext-mtime="${f.mtime}"
-   data-key="${escapeHtml(keyStr)}" title="${escapeHtml(f.rel)}">
-  <span class="fname" data-ext-target="card-title">${escapeHtml(display)}</span>
-${descHtml}
-  <span class="fmeta" data-ext-target="card-meta">${pathHtml}<span class="ftime" data-ext-target="card-time">${formatTime(f.mtime)} · ${formatSize(f.size)}</span></span>
-</a>`;
-}
-
-/** 渲染一个目录分组 */
-function renderSection(dirKey, list, info) {
-  const isRoot = dirKey === '';
-  const defaultLabel = isRoot ? '根目录' : dirKey + '/';
-  const label = info.title || defaultLabel;
-
-  const heading = (info.title && !isRoot)
-    ? `<span class="dir custom" data-ext-target="section-title">${escapeHtml(label)}</span><span class="dpath" data-ext-target="section-path">${escapeHtml(dirKey)}/</span>`
-    : `<span class="dir${info.title ? ' custom' : ''}" data-ext-target="section-title">${escapeHtml(label)}</span>`;
-
-  const dirDesc = info.description
-    ? `<p class="dirdesc" data-ext-target="section-desc">${escapeHtml(info.description)}</p>`
-    : '';
-
-  const cards = list.map(renderCard).join('\n');
-
-  return `<section data-ext-target="section" data-ext-dir="${escapeHtml(dirKey)}">
-  <h2 data-ext-target="section-heading">${heading}<span class="badge" data-ext-target="section-count">${list.length}</span></h2>
-  ${dirDesc}
-  <div class="grid" data-ext-target="grid">
-${cards}
-  </div>
-</section>`;
-}
-
-/** 按目录分组（默认跳过 hidden 文件） */
-function groupFilesByDir(files, opts) {
-  const includeHidden = !!(opts && opts.includeHidden);
-  const groups = new Map();
-  for (const f of files) {
-    if (f.hidden && !includeHidden) continue;
-    const key = f.dir || '';
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(f);
-  }
-  return groups;
-}
-
-/** 目录 key 排序 */
-function sortDirKeys(keys) {
-  return keys.sort((a, b) => {
-    if (a === b) return 0;
-    if (a === '') return -1;
-    if (b === '') return 1;
-    return a.localeCompare(b, 'zh-Hans-CN', { numeric: true });
-  });
-}
 
 /** 构造注入 __NAV_DATA__ 的数据对象 */
 function buildNavData(app, files, cfg, pathname) {
@@ -2810,37 +2731,126 @@ function serializeNavData(data) {
     .replace(/\u2029/g, '\\u2029');
 }
 
-/** 渲染导航页 HTML */
+/**
+ * 构造传给 onNavPage 钩子的只读数据快照（v2.8.3）。
+ *
+ * 展示页扩展拿不到内核的扫描结果，需要通过这里把数据喂进去。
+ * 全部字段做深拷贝 / 只读化，扩展改不动内核状态。
+ */
+function buildNavCtx(app, files, dirMeta, cfg, pathname) {
+  const visible = files.filter((f) => !f.hidden);
+  const dirKeys = new Set(visible.map((f) => f.dir || ''));
+
+  let bytes = 0;
+  for (const f of visible) bytes += f.size || 0;
+
+  return {
+    root: cfg.root,
+    pathname,
+    // 文件名统一用 path（与 ?format=json 输出一致），避免扩展要理解 rel 的内部命名
+    files: files.map((f) => ({
+      path: f.rel,
+      url: '/' + encodePath(f.rel),
+      dir: f.dir || '',
+      name: f.name,
+      title: f.title || '',
+      description: f.description || '',
+      size: f.size,
+      mtime: f.mtime,
+      hidden: !!f.hidden,
+    })),
+    dirs: [...dirMeta.entries()].map(([dir, info]) => ({
+      dir,
+      title: info.title || '',
+      description: info.description || '',
+    })),
+    site: {
+      title: cfg.site.title || '',
+      description: cfg.site.description || '',
+      logo: cfg.site.logo || '',
+      footer: cfg.site.footer || '',
+      accent: cfg.site.accent || '',
+      showStats: !!cfg.site.showStats,
+    },
+    stats: { files: visible.length, dirs: dirKeys.size, bytes },
+  };
+}
+
+/**
+ * 应用 onNavPage 钩子（v2.8.3）。
+ *
+ * 遍历扩展，第一个返回 { html } 的胜出。全部返回 null/undefined 时
+ * 内核走回退逻辑（找 index.html → 空页面）。
+ *
+ * 返回：{ html, extId } 或 null
+ */
+async function applyOnNavPage(app, navCtx, baseCtx) {
+  const cfg = app.cfg || getConfig(app);
+  const timeout = cfg && cfg.extensions ? cfg.extensions.timeout : 0;
+  const policies = getPageExtPolicies(app, navCtx.pathname);
+
+  for (const ext of app.ext.list) {
+    if (!extMatchesScope(ext, navCtx.pathname)) continue;
+    if (!extAllowedByPage(ext, policies)) continue;
+    const fn = ext.server?.onNavPage;
+    if (typeof fn !== 'function') continue;
+
+    try {
+      let r = await Promise.resolve(fn(makeExtCtx(app, ext, { nav: navCtx }, null)));
+      if (r && typeof r.then === 'function') {
+        r = await withTimeout(r, timeout, `扩展 ${ext.id} onNavPage 超时`);
+      }
+      if (r && typeof r === 'object' && typeof r.html === 'string') {
+        return { html: r.html, extId: ext.id };
+      }
+      // 返回了对象但没有 html：视为「这个扩展不参与」，继续找下一个
+    } catch (err) {
+      console.warn(`  ⚠  [${ts()}] 扩展 ${ext.id} onNavPage 出错：${err.message}`);
+      notifyExtError(app, ext, err, 'onNavPage', baseCtx);
+    }
+  }
+  return null;
+}
+
+/**
+ * 检查本次请求是否有扩展会提供展示页（v2.8.3）。
+ *
+ * 判定依据是「有没有扩展实现了 onNavPage」——不硬编码扩展 id，
+ * 这样用户可以换成自己的展示页扩展，内核代码无需改动。
+ */
+function hasNavPageProvider(app, pathname) {
+  const policies = getPageExtPolicies(app, pathname);
+  for (const ext of app.ext.list) {
+    if (!extMatchesScope(ext, pathname)) continue;
+    if (!extAllowedByPage(ext, policies)) continue;
+    if (typeof ext.server?.onNavPage === 'function') return true;
+  }
+  return false;
+}
+
+/**
+ * 渲染导航页 HTML（v2.8.3 起：内容由扩展提供）。
+ *
+ * 流程：
+ *   1. 装配 <head>（__NAV_DATA__ + 客户端库 + head 注入 + styles）
+ *   2. 调 onNavPage 拿 <body> 内容
+ *      ├─ 有扩展提供 → 用它的内容
+ *      └─ 无扩展提供 → 返回 null（由调用方走回退：index.html / 空页面）
+ *   3. 装配 header / footer 注入（扩展仍可往页面注入）
+ *   4. 拼成完整 HTML → 过 onHtml 钩子
+ */
 async function renderNav(app, files, dirMeta, cfg, pathname) {
+  const navCtx = buildNavCtx(app, files, dirMeta, cfg, pathname);
+  const navPage = await applyOnNavPage(app, navCtx, {
+    root: cfg.root, files, dirMeta, configPath: app.configPath, pathname,
+  });
+
+  if (!navPage) return null;   // 无展示页扩展 → 调用方走回退
+
   const SITE = cfg.site;
-
-  // 导航页不展示 hidden 项（hidden 页 URL 仍可访问，见 resolveStaticPath）
-  const visibleFiles = files.filter((f) => !f.hidden);
-  const groups = groupFilesByDir(visibleFiles);
-  const dirKeys = sortDirKeys([...groups.keys()]);
-
-  let totalBytes = 0;
-  const sections = dirKeys.map((key) => {
-    const list = groups.get(key);
-    for (const f of list) totalBytes += f.size;
-    return renderSection(key, list, dirMeta.get(key) || {});
-  }).join('\n');
-
-  const body = sections || '<p class="tip" data-ext-target="empty">当前目录下没有找到任何 HTML 文件。</p>';
-
-  const siteName = SITE.title || 'NavExt';
   const pageTitle = SITE.title || `NavExt · ${path.basename(cfg.root) || cfg.root}`;
-  const logoHtml = SITE.logo ? `<span class="logo" data-ext-target="site-logo">${escapeHtml(SITE.logo)}</span>` : '';
-  const siteDesc = SITE.description ? `<p class="sitedesc" data-ext-target="site-desc">${escapeHtml(SITE.description)}</p>` : '';
-  const statsHtml = SITE.showStats
-    ? `<span class="stat" data-ext-target="stats">${visibleFiles.length} 个文件 · ${dirKeys.length} 个目录 · ${formatSize(totalBytes)}</span>`
-    : '';
   const accentCss = SITE.accent
     ? `--brand:${SITE.accent};--brand-ring:color-mix(in srgb,${SITE.accent} 18%,transparent);` : '';
-
-  const footerParts = [];
-  if (SITE.footer) footerParts.push(`<span data-ext-target="footer-text">${escapeHtml(SITE.footer)}</span>`);
-  footerParts.push(`<span data-ext-target="footer-root">扫描目录：<code>${escapeHtml(cfg.root)}</code></span>`);
 
   const inj = collectInjections(app, pathname);
   const navData = buildNavData(app, files, cfg, pathname);
@@ -2860,12 +2870,47 @@ async function renderNav(app, files, dirMeta, cfg, pathname) {
 
   const html = buildHtml({
     pageTitle, accentCss, headInject, headerInject, footerInject,
-    logoHtml, siteName, statsHtml, siteDesc,
-    body, footerHtml: footerParts.join('\n  '),
+    body: navPage.html,
     dataJson,
   });
 
   return applyOnHtml(app, html, { root: cfg.root, files, dirMeta, configPath: app.configPath, pathname });
+}
+
+/**
+ * 未装展示页扩展时的回退（v2.8.3）。
+ *
+ *  ① 站点 root 下有 index.html → 按自定义主页方式服务（注入扩展）
+ *  ② 没有                      → HTTP 200 + Content-Length: 0（0 字节空页面）
+ *
+ * 「扩展仍加载」是刻意的：other extensions 的 onInit / onFiles / onRequest
+ * 照常工作，只是没有内置展示页可看。
+ */
+async function renderNavFallback(app, req, res, cfg, pathname) {
+  // ① 站点 root 下有 index.html → 按自定义主页方式服务（注入扩展、过 onHtml）
+  const { files, dirMeta } = getState(app, false);
+  const html = await renderCustomHome(app, files, dirMeta, cfg,
+    { file: 'index.html', applyExtensions: true, match: null }, pathname);
+
+  if (html != null) {
+    res.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8',
+      'Content-Length': Buffer.byteLength(html),
+      'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff',
+    });
+    return res.end(html);
+  }
+
+  // ② 没有 index.html → 0 字节空页面
+  //    注意：其他扩展照常加载（onInit/onFiles/onRequest 都工作），只是没内置展示页可看。
+  res.writeHead(200, {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Content-Length': 0,
+    'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff',
+  });
+  return res.end();
 }
 
 /** 组装最终 HTML —— 将静态结构抽出，renderNav 只负责填数据 */
@@ -2948,6 +2993,13 @@ async function renderCustomHome(app, files, dirMeta, cfg, route, pathname) {
 
   return html;
 }
+/**
+ * 组装导航页最终 HTML（v2.8.3：body 内容由展示页扩展提供）。
+ *
+ * 内核只负责「装配」：<head> 里的 __NAV_DATA__、客户端库、扩展 head 注入、
+ * 主题变量；以及 body 顶/底的 header/footer 注入位。
+ * `<body>` 内的展示区（header/main/footer 骨架）由 onNavPage 返回的 p.body 提供。
+ */
 function buildHtml(p) {
   return `<!DOCTYPE html>
 <html lang="zh-CN" data-ext-page="nav">
@@ -2963,41 +3015,10 @@ ${p.headInject}
 <body data-ext-target="body">
 
 ${p.headerInject}
-<header data-ext-target="header">
-  <div class="wrap">
-    <div class="top" data-ext-target="header-top">
-      <h1 data-ext-target="site-title">${p.logoHtml}${escapeHtml(p.siteName)}</h1>
-      ${p.statsHtml}
-    </div>
-    ${p.siteDesc}
-    <div class="search" data-ext-target="search">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-           stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <circle cx="11" cy="11" r="7"></circle>
-        <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
-      </svg>
-      <input id="q" type="search" placeholder="搜索名称、介绍或路径…（按 / 聚焦）"
-             autocomplete="off" spellcheck="false" aria-label="搜索"
-             data-ext-target="search-input">
-    </div>
-  </div>
-</header>
-
-<main class="wrap" data-ext-target="main">
 ${p.body}
-<p class="tip" id="noresult" hidden data-ext-target="noresult">没有匹配的文件</p>
-</main>
-
-<footer class="wrap" data-ext-target="footer">
-  ${p.footerHtml}
-</footer>
-
 <script data-ext-target="nav-data">window.__NAV_DATA__ = ${p.dataJson};</script>
 <script data-ext-target="navext-client">
 ${safeScript(loadNavExtClient())}
-</script>
-<script data-ext-target="core-script">
-${safeScript(CORE_SEARCH_SCRIPT)}
 </script>
 ${p.footerInject}
 </body>
@@ -3018,6 +3039,15 @@ if(a&&/^#[0-9a-f]{6}$/i.test(a))d.style.setProperty('--brand',a);
 }catch(e){}})();`;
 
 /** 基础样式（常量） */
+/**
+ * 主题变量契约（v2.8.3 瘦身）。
+ *
+ * 只保留「主题变量」—— --brand / --brand-ring 与亮/暗两套基础色。
+ * 展示页自己的样式（布局、卡片、搜索框等）已搬到 .js/navext-ui/styles.css。
+ *
+ * 为什么变量必须留在内核：其他扩展（ext-manager 的面板、各种卡片徽章）
+ * 都依赖这套变量做配色。若随展示页一起搬走，没装展示页时它们会全部失效。
+ */
 function BASE_STYLE(accentCss) {
   // 亮/暗两套变量抽成可复用的字面量，供三档主题（跟随/亮/暗）共用。
   // 注意：--brand / --brand-ring 不写死在这里 —— 它们由 accentCss（站点配置）
@@ -3066,186 +3096,8 @@ function BASE_STYLE(accentCss) {
       ${DARK_VARS}
     }
   }
-  *{box-sizing:border-box}
-  html,body{margin:0;padding:0}
-  body{
-    background:var(--bg); color:var(--text);
-    font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",
-         "Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;
-    -webkit-font-smoothing:antialiased;
-  }
-  .wrap{max-width:1180px;margin:0 auto;padding:0 22px}
-  header{
-    position:sticky; top:0; z-index:20;
-    background:var(--header-bg);
-    -webkit-backdrop-filter:saturate(180%) blur(12px);
-    backdrop-filter:saturate(180%) blur(12px);
-    border-bottom:1px solid var(--line);
-    padding:18px 0 14px;
-  }
-  .top{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
-  h1{font-size:17px;font-weight:650;margin:0;letter-spacing:.01em;
-     display:flex;align-items:center;gap:8px}
-  .logo{font-size:20px;line-height:1}
-  .stat{font-size:12.5px;color:var(--muted)}
-  .sitedesc{margin:8px 0 0;font-size:13px;color:var(--muted);max-width:760px}
-  .search{position:relative;margin-top:14px}
-  .search svg{
-    position:absolute;left:13px;top:50%;transform:translateY(-50%);
-    width:15px;height:15px;color:var(--muted);pointer-events:none;
-  }
-  .search input{
-    width:100%; padding:10px 14px 10px 38px;
-    border:1px solid var(--line); border-radius:10px;
-    background:var(--card); color:var(--text);
-    font-size:14px; outline:none;
-    transition:border-color .15s, box-shadow .15s;
-  }
-  .search input::placeholder{color:var(--muted)}
-  .search input:focus{
-    border-color:var(--brand);
-    box-shadow:0 0 0 3px var(--brand-ring, rgba(79,110,247,.16));
-  }
-  .search input::-webkit-search-cancel-button{cursor:pointer}
-  main{padding-bottom:60px}
-  section{margin:26px 0 0}
-  section h2{
-    display:flex;align-items:center;gap:8px;flex-wrap:wrap;
-    margin:0 0 4px; font-size:12.5px; font-weight:600;
-    color:var(--muted); letter-spacing:.02em;
-  }
-  section h2 .dir{word-break:break-all}
-  section h2 .dir.custom{color:var(--text);font-size:13.5px}
-  section h2 .dpath{font-size:11.5px;font-weight:400;color:var(--muted);word-break:break-all}
-  .badge{
-    font-size:11px;font-weight:500;line-height:1;
-    padding:3px 7px;border-radius:20px;
-    background:var(--card);border:1px solid var(--line);color:var(--muted);
-  }
-  .dirdesc{margin:0 0 10px;font-size:12.5px;color:var(--muted);max-width:760px}
-  .grid{
-    display:grid; gap:10px;
-    grid-template-columns:repeat(auto-fill,minmax(235px,1fr));
-  }
-  .card{
-    display:flex; flex-direction:column; gap:5px;
-    padding:12px 14px; border-radius:12px;
-    background:var(--card); border:1px solid var(--line);
-    text-decoration:none; color:inherit;
-    box-shadow:var(--shadow);
-    transition:transform .12s ease, border-color .12s ease;
-  }
-  .card:hover{transform:translateY(-2px);border-color:var(--brand)}
-  .card:active{transform:translateY(0)}
-  .fname{font-weight:600;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .fdesc{
-    font-size:12px;color:var(--muted);line-height:1.5;
-    display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;
-    overflow:hidden;word-break:break-word;
-  }
-  .fmeta{
-    display:flex;flex-wrap:wrap;align-items:center;gap:4px 7px;
-    font-size:11.5px;color:var(--muted);margin-top:auto;
-  }
-  .fpath{
-    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-    font-size:10.5px;padding:1px 5px;border-radius:4px;
-    background:var(--chip);
-    max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-  }
-  .ftime{white-space:nowrap}
-  .ext-extras{
-    display:flex;align-items:center;gap:6px;flex-wrap:wrap;
-    margin-top:4px;
-  }
-  .ext-icon{
-    display:inline-block;vertical-align:middle;border-radius:4px;
-  }
-  .ext-badge{
-    display:inline-block;padding:1px 7px;border-radius:10px;
-    font-size:10.5px;font-weight:600;line-height:1.5;
-    color:#fff;background:#666;
-  }
-  .tip{color:var(--muted);margin:40px 0;text-align:center}
-  footer{
-    border-top:1px solid var(--line);
-    padding:16px 0 32px; font-size:12px; color:var(--muted);
-    display:flex; flex-wrap:wrap; gap:6px 14px; align-items:center;
-  }
-  footer code{
-    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-    background:var(--card); border:1px solid var(--line);
-    padding:2px 6px; border-radius:6px; word-break:break-all;
-  }
 </style>`;
 }
-
-/** 搜索交互脚本 */
-const CORE_SEARCH_SCRIPT = `
-(function () {
-  var input    = document.getElementById('q');
-  var noresult = document.getElementById('noresult');
-
-  function applyFilter() {
-    var kw = input.value.trim().toLowerCase();
-    var visible = 0;
-
-    // 动态查询：内置 UI 可能新增/移除容器（如时间视图的平铺容器），
-    // 因此不能缓存 section 列表。必须限定在 main 内 —— 否则会误伤
-    // 页面其它位置的 <section>（如内置 UI 的主题面板）。
-    var mainEl = document.querySelector('main[data-ext-target="main"]');
-    var sections = mainEl
-      ? Array.prototype.slice.call(mainEl.querySelectorAll('section'))
-      : Array.prototype.slice.call(document.querySelectorAll('section'));
-
-    var inSection = new Set();
-    sections.forEach(function (sec) {
-      var n = 0;
-      sec.querySelectorAll('[data-ext-target="card"]').forEach(function (card) {
-        inSection.add(card);
-        var hit = !kw || (card.dataset.key || '').indexOf(kw) !== -1;
-        card.hidden = !hit;
-        if (hit) n++;
-      });
-      // 空容器（如未使用的平铺容器）不参与「无结果」判定
-      var isEmptyHost = sec.hasAttribute('data-nx-timewrap') && !sec.querySelector('[data-ext-target="card"]');
-      // 只翻转"卡片分组"外壳的显隐，别碰其它 section
-      if (sec.hasAttribute('data-ext-target')) {
-        sec.hidden = (n === 0) && !isEmptyHost;
-      }
-      visible += n;
-    });
-
-    document.querySelectorAll('[data-ext-target="card"]').forEach(function (card) {
-      if (inSection.has(card)) return;
-      var hit = !kw || (card.dataset.key || '').indexOf(kw) !== -1;
-      card.hidden = !hit;
-      if (hit) visible++;
-    });
-
-    noresult.hidden = visible !== 0;
-
-    if (window.NavExt) window.NavExt._notifyCardsChanged();
-  }
-
-  input.addEventListener('input', applyFilter);
-
-  // 供内置 UI 在切换视图后重新应用当前搜索词（卡片被移动过）
-  window.__NAVEX_FILTER__ = applyFilter;
-
-  document.addEventListener('keydown', function (e) {
-    if (e.key === '/' && document.activeElement !== input) {
-      e.preventDefault();
-      input.focus();
-      input.select();
-    } else if (e.key === 'Escape' && document.activeElement === input) {
-      input.value = '';
-      applyFilter();
-      input.blur();
-    }
-  });
-})();
-`;
 
 /* ═══════════════════════════════════════════════════════════════════════════
  *  [12] 静态文件 —— 响应构造与文件服务
@@ -3432,6 +3284,11 @@ function serveStatic(req, res, filePath) {
  * 打分：标题命中 > 文件名命中 > 路径命中 > 描述命中，命中位置越靠前分越高。
  */
 function handleSearch(app, res, url) {
+  // v2.8.3：搜索是展示页的配套能力 —— 没装展示页扩展时一并降级
+  if (!hasNavPageProvider(app, url.pathname || '/')) {
+    return sendJson(res, 404, { error: '展示页扩展未安装，搜索不可用' });
+  }
+
   const q = (url.searchParams.get('q') || '').trim();
   const limitRaw = toInt(url.searchParams.get('limit'), 50);
   const limit = Math.min(Math.max(limitRaw || 50, 1), 500);
@@ -4194,6 +4051,11 @@ async function handleApi(app, req, res, url, pathname) {
 
 /** 导航页 JSON 接口 */
 function handleNavJson(app, res, url) {
+  // v2.8.3：?format=json 输出的是展示页的数据源 —— 没装展示页扩展时一并降级
+  if (!hasNavPageProvider(app, url.pathname || '/')) {
+    return sendJson(res, 404, { error: '展示页扩展未安装，?format=json 不可用' });
+  }
+
   const force = url.searchParams.has('fresh') || url.searchParams.has('refresh');
   const { cfg, files, dirMeta, configPath, configFound } = getState(app, force);
   // 默认排除 hidden；?hidden=1 可包含
@@ -4262,11 +4124,15 @@ async function handleCustomHome(app, req, res, url, route) {
   }
 
   if (html == null) {
-    html = await renderCustomHome(app, files, dirMeta, cfg, route, pathname);
+    html = await renderNav(app, files, dirMeta, cfg, pathname);
 
     if (html === null) {
-      console.warn(`  ⚠  [${ts()}] 自定义主页不可用，回退到自动生成导航页`);
-      html = await renderNav(app, files, dirMeta, cfg, pathname);
+      // v2.8.3：没有扩展提供展示页 → 走回退（index.html / 0 字节空页面）。
+      // 注意不走 htmlCache —— 回退分支自己直接写响应。
+      if (cfg.home && cfg.home.enabled) {
+        console.warn(`  ⚠  [${ts()}] 自定义主页不可用，且未安装展示页扩展，回退到 index.html / 空页面`);
+      }
+      return renderNavFallback(app, req, res, cfg, pathname);
     }
 
     if (cacheEnabled && html != null) {
@@ -4304,6 +4170,12 @@ async function handleNavHtml(app, req, res, url) {
 
   if (html == null) {
     html = await renderNav(app, files, dirMeta, cfg, pathname);
+
+    if (html === null) {
+      // v2.8.3：没有扩展提供展示页 → 找 root/index.html，找不到返回 0 字节
+      return renderNavFallback(app, req, res, cfg, pathname);
+    }
+
     if (cacheEnabled) {
       app.htmlCache.map.set(host + "|" + pathname, html);
     }
@@ -4558,6 +4430,18 @@ function printBanner(app, cfg) {
   console.log(`  缓存     ${cacheLine}`);
   const pageExtLine = cfg.pageExt.enabled ? `开 (${cfg.pageExt.file})` : "关";
   console.log(`  子页策略 ${pageExtLine}`);
+
+  // v2.8.3：展示页由扩展提供 —— 没装时必须明确告知，否则会被当成「坏了」
+  const uiExts = (app.ext.list || []).filter((e) => typeof e.server?.onNavPage === 'function');
+  if (uiExts.length) {
+    console.log(`  展示页   ${uiExts.map((e) => e.id).join(', ')}`);
+  } else {
+    const hasIdx = fs.existsSync(path.join(cfg.root, 'index.html'));
+    console.log(`  展示页   ✖ 未安装（无扩展实现 onNavPage）`);
+    console.log(`           根路径 / 将${hasIdx ? '服务 index.html' : '返回空页面（0 字节）'}`);
+    console.log(`           安装内置展示页：node install.js`);
+  }
+
   const homeRoutes = (cfg.home && cfg.home.routes) || [];
   const hasFallback = cfg.home && cfg.home.enabled && cfg.home.file;
   if (homeRoutes.length || hasFallback) {
@@ -4640,12 +4524,6 @@ function main() {
     });
   });
 
-  // WebSocket 升级（事件总线）；非 ws 升级直接断开
-  App.server.on('upgrade', (req, socket, head) => {
-    if (App.os) App.os.onUpgrade(req, socket, head);
-    else socket.destroy();
-  });
-
   App.server.on('error', (err) => {
     if (err.code === 'EADDRINUSE') {
       console.error(`\n  ✖ 端口 ${cfg.port} 已被占用，请换一个端口：`);
@@ -4654,6 +4532,12 @@ function main() {
       console.error('\n  ✖ 服务启动失败：', err.message, '\n');
     }
     process.exit(1);
+  });
+
+  // WebSocket 升级（事件总线）；非 ws 升级直接断开
+  App.server.on('upgrade', (req, socket, head) => {
+    if (App.os) App.os.onUpgrade(req, socket, head);
+    else socket.destroy();
   });
 
   App.server.listen(cfg.port, cfg.host, () => printBanner(App, cfg));
