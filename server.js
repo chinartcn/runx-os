@@ -102,7 +102,7 @@ const vm = require('vm');
 const OS = require('./os');
 
 /** 服务端版本 —— 会通过 __NAV_DATA__ 传给客户端 */
-const SERVER_VERSION = '2.8.0';
+const SERVER_VERSION = '2.8.2';
 
 /** 客户端库路径 —— 与 server.js 同目录，文件名以 . 开头，静态路由自动拒绝 */
 const NAVEXT_CLIENT_PATH = path.join(__dirname, '.navext.client.js');
@@ -132,10 +132,24 @@ const DEFAULT_CONFIG = Object.freeze({
 
   api: Object.freeze({
     enabled: true,
+    // v2.8.1：写文件接口（/api/extensions/:id/fs/*）默认关闭。
+    //
+    // 原因：这些端点无鉴权，且写入的内容位于扩展目录内——扩展文件会被热重载
+    // 并作为 CommonJS 模块执行。也就是说「一个 HTTP POST → 写 index.js →
+    // 热重载 → 执行任意代码」是一条完整链路，默认开启等于默认开放远程代码执行。
+    //
+    // 这里只关 fs.write、不关 writable，是为了让两个无代码执行风险的功能
+    // 保持默认可用：浏览器里改扩展配置、运行时 toggle 扩展启停。
+    // 这两者写的都是纯数据（受 schema 约束的 config.json、mod.json 的
+    // enabled 布尔），无法注入可执行代码。
+    //
+    // 需要文件写入（如带状态的扩展要落盘）时，在 server.json 显式打开：
+    //   { "api": { "fs": { "write": true } } }
+    // 完全只读部署再把 writable 也关掉。
     writable: true,
     fs: Object.freeze({
       read: true,
-      write: true,
+      write: false,
       maxReadSize: 10 * 1024 * 1024,
       maxWriteSize: 1 * 1024 * 1024,
       maxListEntries: 2000,
@@ -907,6 +921,21 @@ function buildConfig(cli, configPath) {
     }
   }
 
+  /* v2.8.2: home.routes 的 match.env 必须配 value —— 否则永远不命中且无提示 */
+  if (Array.isArray(cfg.home.routes)) {
+    cfg.home.routes.forEach((route, i) => {
+      const m = route && route.match;
+      if (!m || !m.env) return;
+      if (m.value === undefined || m.value === null || String(m.value) === '') {
+        warnCfg(
+          `home.routes[${i}].match.env`,
+          m.env,
+          `—— 配了 env 却没有 value，该路由永远不会命中（env 需与 value 成对使用）`
+        );
+      }
+    });
+  }
+
   /* ── api ── */
   if (fileCfg?.api && typeof fileCfg.api === 'object' && !Array.isArray(fileCfg.api)) {
     const a = fileCfg.api;
@@ -1631,6 +1660,12 @@ function loadExtension(id, jsDir, userCfgAll, moduleCache, scope) {
     version: typeof mod.version === 'string' ? mod.version.trim() : '',
     author: typeof mod.author === 'string' ? mod.author.trim() : '',
     order: Number.isFinite(Number(mod.order)) ? Number(mod.order) : 100,
+    // v2.8.2：CSS 覆盖顺序独立于加载顺序。
+    //   未声明 cssOrder → 回退到 order（与旧行为完全一致）
+    //   显式声明       → 完全按 cssOrder，不受 order / requires 影响
+    cssOrder: Number.isFinite(Number(mod.cssOrder))
+      ? Number(mod.cssOrder)
+      : (Number.isFinite(Number(mod.order)) ? Number(mod.order) : 100),
     dir,
     inject,
     server,
@@ -1943,7 +1978,9 @@ function disposeExt(ext) {
   ext._disposables.clear();
 }
 
-function makeExtFs(extDir) {
+function makeExtFs(extDir, opts) {
+  const MAX = (opts && Number.isFinite(opts.maxReadBytes)) ? opts.maxReadBytes : 0;
+
   return {
     dir: extDir,
     path(rel) {
@@ -1957,10 +1994,39 @@ function makeExtFs(extDir) {
       try { fs.accessSync(r.full); return true; }
       catch { return false; }
     },
-    read(rel, encoding) {
+    /**
+     * 读文件。
+     * v2.8.2：与 ctx.project.read 对齐——支持 { encoding, maxBytes }，
+     * 超限抛 code: 'FS_TOO_LARGE'（ctx.project 抛 PROJECT_FS_TOO_LARGE）。
+     * 旧的 read(rel, encoding) 字符串写法仍然兼容。
+     */
+    read(rel, opts2) {
+      let encoding = 'utf8';
+      let maxBytes = MAX;
+      if (typeof opts2 === 'string') encoding = opts2;
+      else if (opts2 && typeof opts2 === 'object') {
+        if (opts2.encoding) encoding = opts2.encoding;
+        if (Number.isFinite(opts2.maxBytes)) maxBytes = opts2.maxBytes;
+      }
+
       const r = fsResolveUnder(extDir, rel || '');
       if (r.error) throw new Error(r.error);
-      return fs.readFileSync(r.full, encoding || 'utf8');
+
+      if (maxBytes > 0) {
+        let st;
+        try { st = fs.statSync(r.full); }
+        catch (e) { throw new Error(`读不到 ${r.rel || '.'}：${e.code || e.message}`); }
+        if (st.isDirectory()) throw new Error(`${r.rel || '.'} 是目录，不是文件`);
+        if (st.size > maxBytes) {
+          throw Object.assign(
+            new Error(`文件 ${r.rel} 有 ${st.size} 字节，超过上限 ${maxBytes}`),
+            { code: 'FS_TOO_LARGE' }
+          );
+        }
+      }
+
+      if (encoding === 'buffer') return fs.readFileSync(r.full);
+      return fs.readFileSync(r.full, encoding);
     },
     write(rel, content, encoding) {
       const r = fsResolveUnder(extDir, rel || '');
@@ -1977,13 +2043,43 @@ function makeExtFs(extDir) {
       fs.rmSync(r.full, { recursive: true, force: true });
       return r.rel;
     },
-    list(rel) {
+    /**
+     * 列目录。
+     * v2.8.2：与 ctx.project.list 对齐——补 path 字段、支持 opts.depth 递归。
+     * 旧写法 list(rel) 仍返回同样的条目（多了 path 字段，不影响解构）。
+     */
+    list(rel, opts2) {
+      const depth = (opts2 && Number.isFinite(opts2.depth)) ? opts2.depth : 1;
       const r = fsResolveUnder(extDir, rel || '');
       if (r.error) throw new Error(r.error);
-      return fs.readdirSync(r.full, { withFileTypes: true }).map((e) => ({
-        name: e.name,
-        type: e.isDirectory() ? 'dir' : e.isFile() ? 'file' : 'other',
-      }));
+
+      // 入口先校验是目录，与 ctx.project.list 行为对齐
+      let rootSt;
+      try { rootSt = fs.statSync(r.full); }
+      catch (e) {
+        if (e.code === 'ENOENT') throw new Error(`目录不存在：${r.rel || '.'}`);
+        throw e;
+      }
+      if (!rootSt.isDirectory()) throw new Error(`${r.rel || '.'} 不是目录`);
+
+      const out = [];
+      const walk = (dirFull, dirRel, level) => {
+        let entries;
+        try { entries = fs.readdirSync(dirFull, { withFileTypes: true }); }
+        catch { return; }
+        for (const e of entries) {
+          const childRel = dirRel ? `${dirRel}/${e.name}` : e.name;
+          const isDir = e.isDirectory();
+          out.push({
+            name: e.name,
+            path: childRel,
+            type: isDir ? 'dir' : e.isFile() ? 'file' : 'other',
+          });
+          if (isDir && level < depth) walk(path.join(dirFull, e.name), childRel, level + 1);
+        }
+      };
+      walk(r.full, r.rel, 1);
+      return out;
     },
   };
 }
@@ -2104,7 +2200,10 @@ function makeExtCtx(app, ext, base, req) {
     userConfig: Object.assign({}, ext.config.userValues),
     hasUserConfig: ext.config.hasUserValues,
     scope: ext.scope,
-    fs: makeExtFs(ext.dir),
+    // v2.8.2：与 ctx.project 对齐 —— read 加上限守卫、list 补 path/depth
+    fs: makeExtFs(ext.dir, {
+      maxReadBytes: (app.cfg && app.cfg.api && app.cfg.api.fs && app.cfg.api.fs.maxReadSize) || 0,
+    }),
     // ── 站点项目只读（v2.8）：读站点文件不必再 require('fs') ──
     project: makeProjectFs(
       app.cfg ? app.cfg.root : '',
@@ -2299,14 +2398,42 @@ function applyOnResponse(app, info, baseCtx) {
   }
 }
 
-/** 收集所有扩展的注入内容 */
+/**
+ * 收集所有扩展的注入内容。
+ *
+ * v2.8.2：注入顺序与加载顺序解耦。
+ *   - app.ext.list 是「加载顺序」（由 order + requires 拓扑排序决定）；
+ *   - 这里按「CSS 覆盖顺序」（cssOrder，越大越晚注入 = 覆盖优先级越高）重排后
+ *     再累积 styles；
+ *   - scripts / head / 等其他注入仍按加载顺序（它们与覆盖语义无关，
+ *     scripts 按加载顺序可预期性更好）。
+ *
+ * 这样 order 只影响「谁先加载」，cssOrder 只影响「谁的样式赢」，
+ * 不再互相绑架。未声明 cssOrder 的扩展回退到 order，旧行为不变。
+ */
 function collectInjections(app, pathname) {
   const inj = { styles: [], scripts: [], head: [], header: [], footer: [] };
   const policies = getPageExtPolicies(app, pathname);
+
+  const active = [];
   for (const ext of app.ext.list) {
     if (!extMatchesScope(ext, pathname)) continue;
     if (!extAllowedByPage(ext, policies)) continue;
-    for (const key of Object.keys(inj)) inj[key].push(...ext.inject[key]);
+    active.push(ext);
+  }
+
+  // styles 按 cssOrder 升序（值小先注入 → 值大后注入 → 后者覆盖前者）
+  const byCss = active.slice().sort((a, b) => {
+    const d = (a.cssOrder || 0) - (b.cssOrder || 0);
+    return d || String(a.id).localeCompare(String(b.id));
+  });
+  for (const ext of byCss) inj.styles.push(...ext.inject.styles);
+
+  // 其余注入按加载顺序，保持可预期
+  for (const ext of active) {
+    for (const key of ['scripts', 'head', 'header', 'footer']) {
+      inj[key].push(...ext.inject[key]);
+    }
   }
   return inj;
 }
@@ -3308,6 +3435,10 @@ function handleSearch(app, res, url) {
   const q = (url.searchParams.get('q') || '').trim();
   const limitRaw = toInt(url.searchParams.get('limit'), 50);
   const limit = Math.min(Math.max(limitRaw || 50, 1), 500);
+  // v2.8.1：新增 offset 分页。此前 limit 硬钳在 500 且无分页参数，
+  // 宽泛查询命中上千条时只能拿到前 500 条，剩下的是静默丢失。
+  const offsetRaw = toInt(url.searchParams.get('offset'), 0);
+  const offset = Math.max(offsetRaw || 0, 0);
   const dirFilter = (url.searchParams.get('dir') || '').trim().replace(/^\/+|\/+$/g, '');
 
   if (!q) {
@@ -3357,7 +3488,7 @@ function handleSearch(app, res, url) {
   scored.sort((a, b) => (b.score - a.score) || a.f.rel.localeCompare(b.f.rel, 'zh-Hans-CN', { numeric: true }));
 
   const total = scored.length;
-  const items = scored.slice(0, limit).map(({ f, score }) => ({
+  const items = scored.slice(offset, offset + limit).map(({ f, score }) => ({
     rel: f.rel,
     name: f.name,
     dir: f.dir,
@@ -3373,6 +3504,9 @@ function handleSearch(app, res, url) {
     total,
     count: items.length,
     limit,
+    offset,
+    // 还有下一页可取（v2.8.1 新增：offset + count < total）
+    hasMore: offset + items.length < total,
     truncated: total > items.length,
     items,
   });
@@ -3392,12 +3526,20 @@ function apiExtensionsList(app, cfg) {
       enabled: mod.enabled !== false,
       hasConfig: e.config.fields.length > 0,
       hasUserConfig: e.config.hasUserValues,
+      // v2.8.1：补上 scope，与 buildNavData（页面内 __NAV_DATA__）保持一致。
+      // 此前只有页面内 payload 有，外部脚本 / CI 无法从本端点得知扩展作用域，
+      // 排查「某扩展为什么没在这个页面生效」时看不到依据。
+      scope: e.scope || null,
     };
   });
 }
 
 function apiConfigPayload(app, cfg) {
-  const { files, dirMeta } = getState(app, true);
+  // v2.8.1：去掉 force。原先传 true 会绕过扫描缓存，导致每个请求都全量重扫
+  // 目录（2000 文件时单次 ~330ms，20 并发直接堆到 8.5s）。
+  // 这里只需要 fileCount 和目录元数据，用缓存态即可；
+  // 确实需要强制重扫的调用方走 ?fresh=1 / ?refresh=1（getState 已有该通路）。
+  const { files, dirMeta } = getState(app);
   return {
     root: cfg.root,
     configPath: app.cfgFound ? app.configPath : null,
@@ -4038,6 +4180,8 @@ async function handleApi(app, req, res, url, pathname) {
       config: ext.config.values,
       configSchema: ext.config.fields,
       hasUserConfig: ext.config.hasUserValues,
+      // v2.8.1：补上 scope，与列表端点和页面内 __NAV_DATA__ 保持一致
+      scope: ext.scope || null,
     });
   }
 
@@ -4074,6 +4218,8 @@ function handleNavJson(app, res, url) {
       config: e.config.values,
       configSchema: e.config.fields,
       hasUserConfig: e.config.hasUserValues,
+      // v2.8.1：补上 scope，与 buildNavData（页面内 __NAV_DATA__）保持一致
+      scope: e.scope || null,
     })),
     dirs: [...dirMeta.entries()].map(([dir, info]) => ({
       dir, title: info.title || '', description: info.description || '',
@@ -4401,6 +4547,11 @@ function printBanner(app, cfg) {
   console.log(`  文件系统 ${cfg.api.enabled
     ? `读:${cfg.api.fs.read ? '开' : '关'} 写:${cfg.api.fs.write ? '开' : '关'}`
     : '已禁用'}`);
+  // v2.8.1：写文件默认关闭时明确提示原因与开启方式，避免用户以为接口坏了
+  if (cfg.api.enabled && cfg.api.writable && !cfg.api.fs.write) {
+    console.log('           ↑ 扩展文件写入已关闭（写入内容会被热重载执行，默认不开放）');
+    console.log('             需要时在 server.json 打开：{ "api": { "fs": { "write": true } } }');
+  }
   const cacheLine = cfg.cache.html
     ? `开 (扩展 TTL ${cfg.cache.extTtl || TTL.ext}ms)`
     : "关";
@@ -4430,8 +4581,9 @@ function printBanner(app, cfg) {
   console.log(`  导航页   http://${shown}:${cfg.port}/`);
   console.log(`  JSON     http://${shown}:${cfg.port}/?format=json`);
   console.log('  ────────────────────────────────────────');
-  console.log('  ♻  热重载：server.json / html.json / .js / .navext.client.js 改完刷新即生效');
-  console.log('  ⏹  按 Ctrl+C 停止服务');
+  console.log('  ♻  热重载：server.json / html.json / .js 改完刷新即生效');
+  console.log('     （.navext.client.js 也会热重载，但页面有渲染缓存，需加 ?fresh=1 或关掉 cache.html 才看得到）');
+  console.log('  ⏹  按 Ctrl+C 停止服务（SIGTERM 同样支持，扩展会收到 onDispose）');
   console.log('');
 }
 
@@ -4507,11 +4659,31 @@ function main() {
   App.server.listen(cfg.port, cfg.host, () => printBanner(App, cfg));
 
   // 优雅退出
-  process.on('SIGINT', () => {
-    console.log('\n  已停止服务。\n');
+  // v2.8.1：两条退出路径统一处理，且都调用扩展的 onDispose。
+  // 之前只挂了 SIGINT 且不清理扩展，导致：
+  //   1) Ctrl+C 时扩展收不到 onDispose，定时器/挂起请求/本地状态文件不会被收尾
+  //   2) SIGTERM（docker stop / systemd / k8s 驱逐 / 裸 kill）完全没有处理
+  let shuttingDown = false;
+  const shutdown = (signal) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+
+    console.log(`\n  收到 ${signal}，正在停止服务…`);
+
+    // 逆序清理（后加载的先走），与热重载时保持一致
+    const list = (App.ext && App.ext.list) || [];
+    for (let i = list.length - 1; i >= 0; i--) {
+      try { disposeExt(list[i]); }
+      catch (err) { console.warn(`  ⚠  [${ts()}] 清理扩展 ${list[i].id} 出错：${err.message}`); }
+    }
+
+    console.log('  已停止服务。\n');
     App.server.close(() => process.exit(0));
-    setTimeout(() => process.exit(0), 1000);
-  });
+    setTimeout(() => process.exit(0), 1000).unref();
+  };
+
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
