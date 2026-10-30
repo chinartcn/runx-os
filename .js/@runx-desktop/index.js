@@ -137,7 +137,10 @@ function defaultDesktop() {
     icons: [], widgets: [],
     taskbar: { position: 'bottom', pinned: [], show_clock: true },
     // 虚拟显示器分辨率与缩放
-    display: { preset: 'auto', w: 0, h: 0, scale: 'fit' },
+    // mobileScale：窄形态（手机）下的「界面大小」——逻辑桌面放大 1/zoom 倍再整体
+    //   缩放回视口，元素随之变小，一屏能放下更多。默认 0.85（手机上按 1:1 渲染
+    //   时导航条 / 图标 / 字号普遍偏大）。桌面端不参与，不影响虚拟分辨率。
+    display: { preset: 'auto', w: 0, h: 0, scale: 'fit', mobileScale: 0.85 },
     // 新窗口打开时的默认几何
     windowDefaults: { preset: 'cascade', w: 860, h: 580 },
     // windows：窗口几何的会话存档（供刷新后恢复）。
@@ -291,11 +294,19 @@ module.exports = {
     function setDisplay(body) {
       const d = load();
       const b = body || {};
-      const cur = d.display || { preset: 'auto', w: 0, h: 0, scale: 'fit' };
+      const cur = d.display || { preset: 'auto', w: 0, h: 0, scale: 'fit', mobileScale: 0.85 };
       const clampNum = (v, min, max, dflt) => {
         const n = Number(v);
         return Number.isFinite(n) ? Math.min(max, Math.max(min, Math.round(n))) : dflt;
       };
+      // 旧存档没有 mobileScale —— 补上默认值，否则手机上会按 1:1 渲染（偏大）
+      if (cur.mobileScale == null) cur.mobileScale = 0.85;
+      if (b.mobileScale != null) {
+        const ms = Number(b.mobileScale);
+        if (!Number.isFinite(ms)) throw new Error('display.mobileScale 不是数字');
+        // 0.5–1.2：低于 0.5 字小到读不清，高于 1.2 反而比 1:1 还大，没有意义
+        cur.mobileScale = Math.min(1.2, Math.max(0.5, Math.round(ms * 100) / 100));
+      }
       let preset = b.preset != null ? String(b.preset) : cur.preset;
       const hit = DISPLAY_PRESETS.find((p) => p.id === preset);
       if (hit) {

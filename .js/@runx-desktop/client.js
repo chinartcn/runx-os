@@ -439,18 +439,51 @@
     var n = Number(d.scale);
     return isFinite(n) && n > 0 && Math.abs(n - 1) > 0.001;
   }
+  /**
+   * 窄形态下的「界面大小」（1 = 100%，0.85 = 缩小 15%）。
+   *
+   * 手机上按 1:1 渲染时，导航条、Dock、字号、图标都是桌面尺寸 —— 390px 宽的
+   * 屏幕上看着又大又挤，一屏放不下几个东西。这里的做法是把逻辑桌面放大
+   * 1/zoom 倍、再整体缩放回视口：元素视觉变小，能放下的内容变多，而布局
+   * 代码仍跑在一套连续坐标里（不用为「手机小字号」再写一套 CSS）。
+   *
+   * 取值的优先级：
+   *   · 用户显式选过固定缩放（scale 是数字，如 75%）→ 就用它 ——
+   *     窄形态下这就是「界面大小」，不该再叠一层 mobileScale；
+   *   · 否则用 display.mobileScale（默认 0.85）。
+   * 桌面端一律 1，不干扰虚拟分辨率。
+   */
+  function mobileZoom() {
+    if (!narrow()) return 1;
+    var d = cfg && cfg.display;
+    var n;
+    if (d && d.scale != null && d.scale !== 'fit') n = Number(d.scale);
+    else n = d && d.mobileScale != null ? Number(d.mobileScale) : 0.85;
+    if (!isFinite(n) || n <= 0) n = 0.85;
+    return Math.min(1.2, Math.max(0.5, n));
+  }
   /** 逻辑桌面尺寸：设了虚拟分辨率就用它，否则等于物理视口（自适应） */
   function viewport() {
+    var z = mobileZoom();
+    var pv = physViewport();
+    // 窄形态：逻辑桌面 = 可视区 ÷ 界面缩放。取整避免 subpixel 让元素毛边。
+    if (z !== 1) {
+      return { w: Math.max(1, Math.round(pv.w / z)), h: Math.max(1, Math.round(pv.h / z)) };
+    }
+    if (mobileAutoOverride()) return pv;
     var d = cfg && cfg.display;
-    if (mobileAutoOverride()) return physViewport();
     if (d && d.preset && d.preset !== 'auto' && d.w > 0 && d.h > 0) {
       return { w: d.w, h: d.h };
     }
-    return physViewport();
+    return pv;
   }
   /** 当前缩放比：逻辑 → 物理 */
   function displayScale() {
     var d = cfg && cfg.display;
+    // 窄形态的「界面大小」优先：它已经把逻辑尺寸按 1/z 放大过，
+    // 缩放比必须对应地取 z，否则会算出留白或裁切。
+    var z = mobileZoom();
+    if (z !== 1) return z;
     // 固定缩放：用户显式锁定的倍数优先，不受「手机自适应回退」影响 ——
     // 它只决定逻辑尺寸用不用预设，不决定缩放倍数。
     if (fixedZoom()) {
@@ -482,11 +515,32 @@
     var s = displayScale();
     return Math.round(n * (s || 1));
   }
-  /** 窗口可用的自由区域（扣掉导航条与 Dock），逻辑坐标 */
+  /**
+   * 导航条高度的**逻辑**值。
+   *
+   * navbarH() 量的是 CSS 渲染高度（物理像素，导航条挂在被缩放的 vscreen 之外）；
+   * 而 workArea 要跟 viewport() 一样跑在逻辑坐标系里 —— 缩放 85% 时导航条
+   * 物理 34px 对应逻辑 40px，直接用 34 会让「可用高度多算 6px」，
+   * 窗口底边就会压出视口外一点点。
+   */
+  function navbarLogical() {
+    var s = displayScale();
+    return s && s > 0 ? navbarH() / s : navbarH();
+  }
+  /**
+   * 窗口可用的自由区域（扣掉导航条），逻辑坐标。
+   *
+   * ⚠ 只有 w/h —— 因为窗口挂在 `.rx-surface` 上，而这个容器本身就从导航条下沿
+   * 开始：窗口的 `y = 0` 就是导航条下沿，垂直范围是 `[0, h]`。
+   * 早先这里还返回 top（导航条高度）和 bottom（视口底），窗口几何按
+   * `[top, bottom - h]` 夹取 —— 但那两个值是**屏幕坐标**，跟窗口自己的坐标系
+   * 差了一个导航条的高度，结果窗口底边总是多出 34px 压在视口外。
+   * 需要屏幕绝对位置的场景（菜单定位）请直接用 navbarH() / innerHeight。
+   */
   function workArea() {
     var vp = viewport();
-    var top = navbarH();
-    return { top: top, left: 0, w: vp.w, h: vp.h - top, bottom: vp.h };
+    var h = vp.h - navbarLogical();
+    return { w: vp.w, h: Math.max(1, h) };
   }
 
   /**
@@ -516,8 +570,10 @@
     }
 
     // 徽标：只有真的缩放（≠100%）且不是自适应时才提示，避免无意义打扰
+    // 窄形态不显示：手机上这行字要占掉宝贵的一行高度，而「界面大小」
+    // 在设置里就能看到，没必要常驻。
     if (badge) {
-      if (scaled && cfg && cfg.display && cfg.display.preset !== 'auto') {
+      if (scaled && cfg && cfg.display && cfg.display.preset !== 'auto' && !narrow()) {
         badge.textContent = vp.w + '×' + vp.h + ' · ' + Math.round(s * 100) + '%';
         badge.dataset.show = '1';
       } else {
@@ -915,19 +971,24 @@
   }
 
   /**
-   * 把存档里的几何夹回当前视口。
-   * 规则与拖动一致：至少保留 120px（或半宽）标题栏在可视区内，
-   * 这样即使用户从大屏切到手机，窗口也不会「消失」在屏幕外抓不到。
+   * 把存档里的几何夹回当前视口 —— 窗口**完整**留在可视区内。
+   *
+   * 以前这里只保证「120px 标题栏可见」，允许窗口大半个身子挂在屏幕外。
+   * 手机上那个 120px 抓手往往正好是屏幕外的部分：从 1280×800 的存档切到
+   * 390px 宽的手机，窗口右半边整片看不见，只能靠标题栏慢慢往回拖。
+   * 现在改为硬夹：宽高不超过可用区，坐标不越界。
+   * 窗口比视口还大时（历史存档、从大屏切小屏）先缩到视口大小。
    */
   function clampGeomToView(g) {
-    var wa = workArea(), view = viewport();
-    var w = clamp(g.w, 280, Math.max(280, wa.w));
-    var h = clamp(g.h, 180, Math.max(180, wa.h));
-    var keepH = Math.min(120, w * 0.5);
+    var wa = workArea();
+    var maxW = Math.max(160, wa.w);
+    var maxH = Math.max(120, wa.h);
+    var w = clamp(Number(g.w) || 0, Math.min(280, maxW), maxW);
+    var h = clamp(Number(g.h) || 0, Math.min(180, maxH), maxH);
     return {
       w: w, h: h,
-      x: clamp(g.x, -(w - keepH), Math.max(-(w - keepH), view.w - keepH)),
-      y: clamp(g.y, wa.top, Math.max(wa.top, view.h - 34)),
+      x: clamp(Number(g.x) || 0, 0, Math.max(0, wa.w - w)),
+      y: clamp(Number(g.y) || 0, 0, Math.max(0, wa.h - h)),
     };
   }
 
@@ -974,7 +1035,10 @@
   function defaultGeom(index) {
     var wa = workArea();
     // 窄屏：直接用满可用区（手机上开个小窗口没意义）
-    if (narrow()) return { x: 6, y: 6, w: wa.w - 12, h: wa.h - 12 };
+    // y 从导航条下沿起算 —— 以前是 6px，窗口会盖住菜单栏。
+    if (narrow()) {
+      return { x: 0, y: 0, w: wa.w, h: Math.max(180, wa.h) };
+    }
 
     var wd = (cfg && cfg.windowDefaults) || {};
     var w = clamp(Number(wd.w) || 860, 320, Math.max(320, wa.w - 16));
@@ -994,7 +1058,7 @@
     if (mode === 'center') {
       return {
         x: clamp(Math.round((wa.w - w) / 2), 8, Math.max(8, wa.w - w - 8)),
-        y: clamp(wa.top + Math.round((wa.h - h) / 2), wa.top, Math.max(wa.top, wa.bottom - h - 6)),
+        y: clamp(Math.round((wa.h - h) / 2), 0, Math.max(0, wa.h - h - 6)),
         w: w, h: h,
       };
     }
@@ -1002,7 +1066,7 @@
       var hw = Math.max(320, Math.floor(wa.w / 2) - 10);
       return {
         x: mode === 'halfLeft' ? 8 : Math.max(8, wa.w - hw - 8),
-        y: wa.top + 8,
+        y: 8,
         w: hw, h: Math.max(220, wa.h - 24),
       };
     }
@@ -1012,7 +1076,7 @@
       var qn = index % 4;
       return {
         x: (qn % 2) ? Math.max(8, wa.w - qw - 8) : 8,
-        y: wa.top + ((qn >= 2) ? Math.floor(wa.h / 2) : 8),
+        y: ((qn >= 2) ? Math.floor(wa.h / 2) : 8),
         w: qw, h: qh,
       };
     }
@@ -1020,7 +1084,7 @@
     var off = (index % 6) * 26;
     return {
       x: clamp(48 + off, 8, Math.max(8, wa.w - w - 8)),
-      y: clamp(wa.top + 20 + off, wa.top, Math.max(wa.top, wa.bottom - h - 6)),
+      y: clamp(20 + off, 0, Math.max(0, wa.h - h - 6)),
       w: w, h: h,
     };
   }
@@ -1045,13 +1109,11 @@
    *   2) 设备屏宽 ≤680（真机「桌面版网站」时 screen.width 仍是物理宽）
    *   3) 无 hover 能力（(hover:none)）—— 手机/平板的本质特征，触屏笔记本
    *      有 (hover:hover)，不会被误判；配合宽视口即可锁定「桌面版网站」模式
-   *   4) 视口被缩放（visualViewport.scale > 1）—— **带滞回**，见下
    *
-   * ⚠ 第 ④ 条必须做「滞回（hysteresis）」：vv.scale 会被键盘弹起、地址栏
-   *   收展、双击缩放等**瞬时**改变。判据若直接读实时值，narrow() 就会在
-   *   true/false 之间反复横跳 —— 表现就是「点个终端，桌面放大又缩小」。
-   *   所以这里让第 ④ 条一旦成立就**保持**，直到 scale 明确回落（<1.02）
-   *   才释放。
+   * ⚠ 这里**不看 visualViewport.scale**。早先把它当第 ④ 条判据（还配了滞回），
+   *   结果手机上双指一捏，形态就在「窄/宽」之间横跳，布局整个换一套 ——
+   *   与「缩放只改变视觉放大倍数、不该动布局」直接冲突。缩放由 relayout
+   *   单独处理（纯缩放时直接跳过重排），形态判定只认「宽 + 设备屏宽 + 触屏」。
    *
    * 缓存：结论只跟「可视区宽 + 设备屏宽」有关，这两个没变就复用，
    * 避免同一形态被反复重算。cfg 变化（切分辨率预设）时用
@@ -1062,8 +1124,7 @@
     catch (e) { return false; }
   }
   var _narrowCache = null;      // { key, val }
-  var _scaledSticky = false;    // 第 ④ 条的滞回状态
-  function invalidateNarrow() { _narrowCache = null; _scaledSticky = false; }
+  function invalidateNarrow() { _narrowCache = null; }
   function narrow() {
     var w = (root.clientWidth || window.innerWidth || 0);
     var dw = deviceWidth();
@@ -1081,14 +1142,10 @@
       var touchOnly = noHover() &&
         window.matchMedia && window.matchMedia('(pointer: coarse)').matches;
       if (touchOnly && dw && dw <= 900) val = true;
-      else if (touchOnly) {
-        // ④ 视口被缩放：滞回处理 —— 进入阈值 1.05，退出阈值 1.02
-        var vv = window.visualViewport;
-        var sc = vv && vv.scale ? vv.scale : 1;
-        if (sc > 1.05) _scaledSticky = true;
-        else if (sc < 1.02) _scaledSticky = false;
-        val = _scaledSticky;
-      } else val = false;
+      // 触摸设备但屏幕不窄（平板横屏、开了「桌面版网站」把布局视口撑到 ~980）：
+      // 仍按「布局视口不算宽」处理成窄形态，缩放不参与判定。
+      else if (touchOnly) val = w > 0 && w <= 900;
+      else val = false;
     }
 
     _narrowCache = { key: key, val: val };
@@ -1117,7 +1174,8 @@
       return id;
     }
 
-    var g = opts.geom || defaultGeom(order.length);
+    // 统一夹取：defaultGeom 给的尺寸也走一遍夹取，任何来源的几何都不会越界
+    var g = clampGeomToView(opts.geom || defaultGeom(order.length));
     // 窄屏用紧凑工具栏：手机上垂直空间比「控件好按」更稀缺
     var initialStyle = narrow() ? 'unifiedCompact' : 'unified';
     var w = el('div', 'rx-window rx-material-regular' +
@@ -1331,7 +1389,7 @@
       return key;
     }
 
-    var g = opts.geom || defaultGeom(order.length);
+    var g = clampGeomToView(opts.geom || defaultGeom(order.length));
     var initialStyle = narrow() ? 'unifiedCompact' : 'unified';
     var w = el('div', 'rx-window rx-material-regular' +
       (initialStyle !== 'unified' ? ' ' + initialStyle : ''));
@@ -1572,7 +1630,7 @@
     } else {
       rec.restored = currentGeom(rec);
       var wa = workArea();
-      applyGeom(rec, { x: wa.left, y: wa.top, w: wa.w, h: wa.h });
+      applyGeom(rec, { x: 0, y: 0, w: wa.w, h: wa.h });
       rec.maximized = true;
       rec.el.classList.add('maximized');
       announce('已最大化');
@@ -1653,17 +1711,15 @@
     var view = viewport();
     var g = currentGeom(rec);
 
-    // —— 约束：必须始终留出可抓的区域 ——
-    // 水平：至少 120px 的标题栏留在视口里（否则拖到屏幕外就再也抓不回来）
-    // 垂直：标题栏不得钻进导航条上方，也不得落到导航条之下
-    var keepH = Math.min(120, g.w * 0.5);
-    var minX = -(g.w - keepH);
-    var maxX = view.w - keepH;
-    var minY = wa.top;
-    var maxY = view.h - 34;
+    // —— 约束：窗口必须完整留在视口内 ——
+    // 以前只留 120px 抓手，允许「半个窗口挂在屏幕外」；手机上那点抓手常常
+    // 正好在屏幕外，窗口就再也拖不回来了。现在整窗夹在可用区内：
+    // 水平 [0, view.w - w]、垂直 [导航条下沿, 视口底 - h]。
+    var maxX = Math.max(0, view.w - g.w);
+    var maxY = Math.max(0, wa.h - g.h);     // 窗口坐标系：y=0 就是导航条下沿
 
-    rec.el.style.left = px(clamp(dragState.ox + dx, minX, maxX));
-    rec.el.style.top = px(clamp(dragState.oy + dy, minY, maxY));
+    rec.el.style.left = px(clamp(dragState.ox + dx, 0, maxX));
+    rec.el.style.top = px(clamp(dragState.oy + dy, 0, maxY));
     if (e.cancelable && e.type === 'touchmove') e.preventDefault();
   }
   function dragEnd() {
@@ -1672,12 +1728,14 @@
     if (rec) {
       rec.el.classList.remove('dragging');
       rec.geom = currentGeom(rec);
-      // 松手吸附：贴到 8px 网格，桌面看起来是「摆放」而不是「漂着」
-      var snapped = {
+      // 松手吸附：贴到 8px 网格，桌面看起来是「摆放」而不是「漂着」。
+      // 吸附会把坐标向上取整（69 → 72），可能把刚夹好的窗口又顶出视口 ——
+      // 所以吸附完必须再过一遍夹取，贴边优先于对齐网格。
+      var snapped = clampGeomToView({
         x: Math.round(rec.geom.x / 8) * 8,
         y: Math.round(rec.geom.y / 8) * 8,
         w: rec.geom.w, h: rec.geom.h,
-      };
+      });
       applyGeom(rec, snapped);
       rec.geom = snapped;
       saveWindows();          // 落位完成才写盘（拖动过程中不写）
@@ -1712,17 +1770,18 @@
     var p = pointOf(e);
     var dx = p.x - s.sx, dy = p.y - s.sy;
     var wa = workArea();
-    var minW = 280, minH = 180;
 
     var x = s.ox, y = s.oy, w = s.ow, h = s.oh;
-    if (s.dir.indexOf('e') >= 0) w = clamp(s.ow + dx, minW, wa.w - s.ox);
-    if (s.dir.indexOf('s') >= 0) h = clamp(s.oh + dy, minH, wa.bottom - s.oy);
+    // 最小尺寸不能超过可用区，否则 clamp 的上下界会反过来（lo > hi）
+    var minW = Math.min(280, wa.w), minH = Math.min(180, wa.h);
+    if (s.dir.indexOf('e') >= 0) w = clamp(s.ow + dx, minW, Math.max(minW, wa.w - s.ox));
+    if (s.dir.indexOf('s') >= 0) h = clamp(s.oh + dy, minH, Math.max(minH, wa.h - s.oy));
     if (s.dir.indexOf('w') >= 0) {
-      w = clamp(s.ow - dx, minW, s.ox + s.ow);
+      w = clamp(s.ow - dx, minW, Math.max(minW, s.ox + s.ow));
       x = s.ox + s.ow - w;
     }
     if (s.dir.indexOf('n') >= 0) {
-      h = clamp(s.oh - dy, minH, s.oy + s.oh - wa.top);
+      h = clamp(s.oh - dy, minH, Math.max(minH, s.oy + s.oh));
       y = s.oy + s.oh - h;
     }
     applyGeom(rec, { x: x, y: y, w: w, h: h });
@@ -1981,6 +2040,19 @@
         act: function () { setDisplay({ preset: p.id, scale: p.scale || 'fit' }); },
       });
     });
+    // 窄形态：分辨率预设基本都是「给桌面端用的」，手机上真正管用的旋钮是
+    // 整体界面大小 —— 放在这里而不是埋在设置里，手机上少点两层。
+    if (narrow()) {
+      viewMenu.push({ sep: true }, { head: '界面大小' });
+      var zNow = mobileZoom();
+      [[1, '标准 100%'], [0.85, '紧凑 85%'], [0.75, '更紧凑 75%'], [0.65, '极小 65%']]
+        .forEach(function (pz) {
+          viewMenu.push({
+            label: pz[1], glyph: Math.abs(zNow - pz[0]) < 0.02 ? 'check' : '',
+            act: function () { setDisplay({ mobileScale: pz[0], scale: 'fit' }); },
+          });
+        });
+    }
     viewMenu.push({ label: '显示设置…', glyph: 'settings', act: openSettings });
 
     viewMenu.push({ sep: true }, { head: '强调色' });
@@ -2714,6 +2786,37 @@
     });
     sRow.appendChild(sSeg);
     body.appendChild(sRow);
+    // 窄形态专属：界面大小（整体缩小 → 元素变小、一屏显示更多）
+    // 手机上「分辨率预设」基本都被回退成自适应，真正能调的是这个倍数。
+    if (narrow()) {
+      body.appendChild(el('div', 'section-label', '界面大小'));
+      var mzWrap = el('div', 'rx-chip-wrap');
+      mzWrap.setAttribute('role', 'radiogroup');
+      mzWrap.setAttribute('aria-label', '界面大小');
+      var curZ = mobileZoom();
+      [[1, '标准 100%'], [0.85, '紧凑 85%'], [0.75, '更紧凑 75%'], [0.65, '极小 65%']]
+        .forEach(function (pair) {
+          var b2 = el('button', 'rx-chip');
+          b2.type = 'button';
+          b2.setAttribute('role', 'radio');
+          b2.setAttribute('aria-checked', Math.abs(curZ - pair[0]) < 0.02 ? 'true' : 'false');
+          b2.textContent = pair[1];
+          b2.addEventListener('click', function () {
+            // 只改倍数：预设尺寸在手机上本来就不参与，别顺手把它清掉
+            setDisplay({ mobileScale: pair[0], scale: 'fit' });
+            for (var i = 0; i < mzWrap.children.length; i++) {
+              mzWrap.children[i].setAttribute('aria-checked', 'false');
+            }
+            b2.setAttribute('aria-checked', 'true');
+          });
+          mzWrap.appendChild(b2);
+        });
+      body.appendChild(mzWrap);
+      body.appendChild(el('div', 'caption',
+        '整张桌面按倍数缩小，导航条 / 图标 / 字号一起变小，一屏能放下更多。' +
+        '只影响手机这类窄屏；桌面端仍按上面的分辨率设置渲染。'));
+    }
+
     body.appendChild(el('div', 'caption',
       '当前逻辑桌面 ' + viewport().w + ' × ' + viewport().h +
       '，缩放 ' + Math.round(displayScale() * 100) + '%。' +
@@ -2907,7 +3010,12 @@
   function setDisplay(d) {
     api('/desktop/display', { method: 'PUT', body: JSON.stringify(d) })
       .then(function () { return reloadDesktop(); })
-      .then(function () { showToast('显示已切换：' + viewport().w + '×' + viewport().h); })
+      .then(function () {
+        // 坐标系换了（分辨率 / 界面大小 / 缩放任一变化）：已有窗口按新可用区
+        // 重新夹取，否则它们会按旧尺寸留在新坐标系外面。
+        relayout();
+        showToast('显示已切换：' + viewport().w + '×' + viewport().h);
+      })
       .catch(function (e) { showToast('分辨率没能应用：' + e.message); });
   }
 
@@ -3273,8 +3381,34 @@
    * 视口变化：窗口重新约束在可视区内
    * （手机旋屏 / 软键盘弹起 / 地址栏伸缩都会触发，不止 resize）
    * ═══════════════════════════════════════════════════════════════════ */
+  /**
+   * 捏合缩放（pinch zoom）/ 双击缩放只改变**视觉放大倍数**，不该让布局重排。
+   *
+   * 以前 visualViewport 的 resize 一律触发 relayout，于是手机上双指一捏：
+   * vv.width 变小 → physViewport() 变小 → 逻辑桌面被重算、窗口被重新夹取，
+   * 视觉上就是「一边放大一边整页重排」，文字跳、窗口跑。
+   * 用户的预期很简单：放大只是把眼前这块看清楚，布局不动。
+   *
+   * 所以这里区分两类变化：
+   *   · 布局视口尺寸变了（旋屏、窗口拉伸）→ innerWidth/Height 变化 → 必须重排
+   *   · vv.scale 变了、布局视口没变 → 纯缩放 → **不重排**，布局钉死
+   * 键盘弹起/地址栏收起是第三类：scale 不变、vv.height 变小 → 照常重排。
+   */
+  var _lastRelayoutScale = (window.visualViewport && window.visualViewport.scale) || 1;
+  var _lastRelayoutLayout = { w: window.innerWidth || 0, h: window.innerHeight || 0 };
   var resizeTimer = null;
   function relayout() {
+    var vv = window.visualViewport;
+    var s = (vv && vv.scale) || 1;
+    var lw = window.innerWidth || 0, lh = window.innerHeight || 0;
+
+    var layoutChanged = (lw !== _lastRelayoutLayout.w || lh !== _lastRelayoutLayout.h);
+    if (layoutChanged) _lastRelayoutLayout = { w: lw, h: lh };
+
+    var zoomChanged = Math.abs(s - _lastRelayoutScale) > 0.001;
+    _lastRelayoutScale = s;
+    if (zoomChanged && !layoutChanged) return;      // 纯缩放：布局不动
+
     // 先重算虚拟显示器的缩放与居中、把桌面钉到真实可视区，
     // 再按新的可用区夹取窗口 —— 顺序反了会用旧坐标系算出错误位置。
     applyDisplay();
@@ -3284,16 +3418,11 @@
       var rec = windows[id];
       if (!rec) return;
       if (rec.fullscreen) { applyGeom(rec, { x: 0, y: 0, w: viewport().w, h: viewport().h }); return; }
-      if (rec.maximized) { applyGeom(rec, { x: wa.left, y: wa.top, w: wa.w, h: wa.h }); return; }
-      var g = currentGeom(rec);
-      var w = Math.min(g.w, wa.w);
-      var h = Math.min(g.h, wa.h);
-      // 与拖动同一套约束：保证标题栏至少有 120px（或半宽）留在视口里
-      var keepH = Math.min(120, w * 0.5);
-      var x = clamp(g.x, -(w - keepH), Math.max(0, wa.w - keepH));
-      var y = clamp(g.y, wa.top, Math.max(wa.top, viewport().h - 34));
-      applyGeom(rec, { x: x, y: y, w: w, h: h });
-      rec.geom = { x: x, y: y, w: w, h: h };
+      if (rec.maximized) { applyGeom(rec, { x: 0, y: 0, w: wa.w, h: wa.h }); return; }
+      // 与拖动同一套约束：窗口完整留在可用区内
+      var cg = clampGeomToView(currentGeom(rec));
+      applyGeom(rec, cg);
+      rec.geom = cg;
     });
   }
   function scheduleRelayout() {
