@@ -80,13 +80,16 @@ PORT=8080 ./start.sh       # 自定义端口
 RunX OS
 ├── server.js        NavExt 内核（静态服务 + 扩展系统 + 热重载）
 ├── os.js            特权层：受管进程 / 事件总线 / 文件系统护栏 / WS 原语
-├── .js/             5 个核心扩展（core:true，独享 ctx.os 特权通道）
+├── .js/             8 个核心扩展（core:true，独享 ctx.os 特权通道）
 │   ├── @runx-supervisor   应用生命周期（启动 / 停止 / 重启 / autostart / 崩溃自愈）
 │   ├── @runx-pax          应用安装（tarball / 目录安全解包 → appex.json → apps.json）
+│   ├── @runx-mounts       挂载点（文档 §7）
 │   ├── @runx-event-bus    内核内事件总线（app:started / app:stopped / desktop:changed …）
 │   ├── @runx-desktop      桌面 UI（导航条 / 菜单栏 / 可拖拽窗口 / Dock / 图标网格）
 │   │   └── assets/        设计令牌 + Inter 可变字体（拉丁子集）
-│   └── @runx-mounts       @runx-mounts 挂载点（文档 §7）
+│   ├── @runx-monitor      状态监视器（进程表 / 端口 / 事件流 / GC 统计，WS 实时推送）
+│   ├── @runx-files        文件管理器（浏览 / 预览 / 下载，写操作默认关闭）
+│   └── @runx-settings     全局设置（接管全部设置：内核级 + 桌面级统一面板）
 ├── apps/            已部署应用（当前内置 term）
 │   └── term/        RunX 真实交互式终端（script 伪 PTY + xterm.js）
 ├── var/runx/        运行时状态（apps.json / desktop.json / logs），gitignore
