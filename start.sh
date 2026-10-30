@@ -22,6 +22,14 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# 端口优先级：PORT 环境变量 > server.json 的 port > 3000。
+# 脚本自己要用端口做占用检查和就绪探测，所以不能「不传 --port」了事 ——
+# 那样探测的端口和内核实际端口会不一致。这里把 server.json 的值读出来当默认，
+# 于是「改配置文件 → ./start.sh」也能生效，而不是永远被硬编码的 3000 顶掉。
+if [ -z "${PORT:-}" ] && [ -f "$ROOT/server.json" ]; then
+  PORT="$(node -e 'try{const c=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));if(c&&c.port!=null)process.stdout.write(String(c.port))}catch(e){}' "$ROOT/server.json" 2>/dev/null)"
+fi
 PORT="${PORT:-3000}"
 APP_PORT=3460
 APP_CWD="$(cd "$ROOT/apps/term" && pwd)"

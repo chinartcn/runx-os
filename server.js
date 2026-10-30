@@ -109,7 +109,10 @@ const NAVEXT_CLIENT_PATH = path.join(__dirname, '.navext.client.js');
 
 /** 内置默认配置 —— 冻结，运行时绝不修改 */
 const DEFAULT_CONFIG = Object.freeze({
-  port: Number(process.env.PORT) || 3000,
+  // 端口只写死默认值；环境变量 PORT 在 buildConfig() 里按
+  // CLI > PORT > server.json > 此默认 的顺序统一处理（不能只放在这里 ——
+  // 那样 server.json 一有 port 字段就会把它盖掉）。
+  port: 3000,
   host: '0.0.0.0',
   depth: 8,
 
@@ -847,6 +850,25 @@ function buildConfig(cli, configPath) {
       warnCfg('host', fileCfg.host, '不是非空字符串，已忽略');
     } else if (typeof fileCfg.host === 'string' && fileCfg.host.trim()) {
       cfg.host = fileCfg.host.trim();
+    }
+  }
+  // 环境变量 PORT 的优先级：CLI > 环境变量 > server.json > 内置默认。
+  //
+  // 为什么单独挪到这里：PORT 原本只作为 DEFAULT_CONFIG 的初值，而 server.json
+  // 里的 port 字段会把它整条盖掉 —— 结果 `PORT=8080 node server.js` 依然监听
+  // 3000（server.json 里写着 3000）。容器/托管平台（Cloud Run、Railway、
+  // Heroku、fly.io…）都是靠注入 PORT 决定端口的，被配置文件顶掉会导致服务
+  // 起在平台不转发、健康检查也探测不到的端口上。
+  if (process.env.PORT !== undefined && String(process.env.PORT).trim() !== '') {
+    const raw = String(process.env.PORT).trim();
+    const p = clampPort(raw);
+    if (p === null) {
+      warnCfg('PORT', raw, `环境变量不是合法端口，已忽略（沿用 ${cfg.port}）`);
+    } else {
+      if (fileCfg && fileCfg.port !== undefined && Number(cfg.port) !== p) {
+        warnCfg('port', fileCfg.port, `被环境变量 PORT=${p} 覆盖`);
+      }
+      cfg.port = p;
     }
   }
   if (cli.port !== undefined) {

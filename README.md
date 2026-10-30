@@ -68,7 +68,13 @@ git clone https://github.com/chinartcn/runx-os.git
 cd runx-os
 ./start.sh                 # 前台运行，Ctrl+C 停止
 PORT=8080 ./start.sh       # 自定义端口
+node server.js             # 不经守护脚本直接起内核
+PORT=8080 node server.js   # 直接起内核 + 自定义端口
 ```
+
+**端口优先级**：`--port` 命令行参数 > 环境变量 `PORT` > `server.json` 的 `port` > 3000。
+容器/托管平台（Cloud Run、Railway、Heroku、fly.io…）注入的 `PORT` 会被采纳，
+不会被配置文件里的固定值顶掉；被覆盖时启动日志会说明一句。
 
 要求：Node.js ≥ 14（桌面用到的 `ctx.fetch` 需要 ≥ 18），`bash`，以及 `git` 或 `curl` 二选一。
 
