@@ -528,19 +528,20 @@
     return s && s > 0 ? navbarH() / s : navbarH();
   }
   /**
-   * 窗口可用的自由区域（扣掉导航条），逻辑坐标。
+   * 窗口可用的自由区域，逻辑坐标。
    *
-   * ⚠ 只有 w/h —— 因为窗口挂在 `.rx-surface` 上，而这个容器本身就从导航条下沿
-   * 开始：窗口的 `y = 0` 就是导航条下沿，垂直范围是 `[0, h]`。
-   * 早先这里还返回 top（导航条高度）和 bottom（视口底），窗口几何按
-   * `[top, bottom - h]` 夹取 —— 但那两个值是**屏幕坐标**，跟窗口自己的坐标系
-   * 差了一个导航条的高度，结果窗口底边总是多出 34px 压在视口外。
-   * 需要屏幕绝对位置的场景（菜单定位）请直接用 navbarH() / innerHeight。
+   * ⚠ 只有 w/h，而且**直接量 `.rx-surface` 的客户区**，别自己拿视口去减：
+   * 所有窗口（应用窗口与内核面板窗口）都挂在这个容器上，它的 origin 就是
+   * 「导航条下沿、Dock 上沿」—— 窗口的 y=0 是导航条下沿，y=h 是 Dock 上沿。
+   * 手算 `视口高 - 导航条` 会漏掉 Dock：窗口底边会钻到 Dock 底下被 surface
+   * 的 overflow 裁掉（手机上正好裁掉一整个窗口底栏），而 `viewport()` 是
+   * 虚拟分辨率的世界，跟 surface 的实际布局框也不一定同尺寸。
    */
   function workArea() {
     var vp = viewport();
-    var h = vp.h - navbarLogical();
-    return { w: vp.w, h: Math.max(1, h) };
+    var w = (surface && surface.clientWidth) || vp.w;
+    var h = (surface && surface.clientHeight) || Math.max(1, vp.h - navbarLogical());
+    return { w: Math.max(1, w), h: Math.max(1, h) };
   }
 
   /**
@@ -1495,7 +1496,12 @@
     w.addEventListener('mousedown', function () { focusWindow(key); }, true);
     w.addEventListener('touchstart', function () { focusWindow(key); }, { passive: true, capture: true });
 
-    vscreen.appendChild(w);
+    // 与应用窗口同一个容器（.rx-surface）—— 窗口几何是按这个坐标系算的。
+    // 早先这里挂到 vscreen 上，虽然只差一个导航条的高度，但后果很具体：
+    // y=0 落在导航条**背后**（导航条 z-index 更高），工具栏连三个圆点一起被盖住，
+    // 看起来就是「没有拖动栏、整屏铺满、关不掉」；同时底部又多出导航条那么高，
+    // 被 surface 的 overflow 裁掉。应用窗口在 surface 上一直是对的，统一过来。
+    surface.appendChild(w);
     if (typeof applyAccent === 'function') applyAccent();
 
     try { mountFn(mount); }
@@ -1609,6 +1615,7 @@
     if (i >= 0) order.splice(i, 1);
     if (activeId === id) activeId = nextVisibleId(id);
     if (activeId) focusWindow(activeId);
+    syncChrome();
     renderDock(); renderMenus();
     saveWindows();            // 关掉的窗口不该在刷新后复活
     if (notify !== false) {
@@ -1638,20 +1645,39 @@
     saveWindows();
   }
 
+  /**
+   * 有任何窗口全屏时，把导航条与 Dock 收起来，让桌面层让出整块屏幕。
+   *
+   * 窗口挂在 .rx-surface 里，而这个容器本身就是「导航条下沿 → Dock 上沿」，
+   * 所以光把窗口设成 viewport 尺寸是不够的 —— 它会从导航条下面开始，
+   * 底部多出来的那截被 surface 的 overflow 裁掉，导航条和 Dock 还压在显眼处。
+   * 全屏该是「整块屏幕只剩这个窗口」：先把 chrome 收掉，surface 才会扩到满屏，
+   * 紧接着 workArea() 量到的就是扩满后的尺寸。
+   */
+  function syncChrome() {
+    var any = order.some(function (id) { return windows[id] && windows[id].fullscreen; });
+    if (any) root.dataset.fullscreen = '1';
+    else delete root.dataset.fullscreen;
+  }
+
   function toggleFullscreen(id) {
     var rec = windows[id];
     if (!rec) return;
     if (rec.fullscreen) {
       rec.el.classList.remove('fullscreen');
       rec.fullscreen = false;
+      syncChrome();
       restoreGeom(rec);
       announce('已退出全屏');
     } else {
       if (!rec.maximized) rec.restored = currentGeom(rec);
-      applyGeom(rec, { x: 0, y: 0, w: viewport().w, h: viewport().h });
       rec.el.classList.add('fullscreen');
       rec.fullscreen = true;
       rec.maximized = false;
+      syncChrome();
+      // syncChrome 改的是样式，读 workArea() 会强制一次布局，量到的是收起来之后的可用区
+      var wa = workArea();
+      applyGeom(rec, { x: 0, y: 0, w: wa.w, h: wa.h });
       announce('已进入全屏，按 ⌘⌃F 或 Esc 退出');
     }
     saveWindows();
@@ -1802,10 +1828,14 @@
   function showToastRect(rec) {
     var g = rec.geom || currentGeom(rec);
     // 只更新副标题（尺寸），不做弹窗 —— 拖动中的反馈要轻
-    if (rec.subtitle) {
-      rec.subtitle.textContent = (rec.app.type === 'node' ? 'node · :' + rec.app.port + ' · ' : '') +
-        Math.round(g.w) + ' × ' + Math.round(g.h);
-    }
+    if (!rec.subtitle) return;
+    // 面板窗口没有 rec.app（只有应用窗口才有），这里必须容错：
+    // 早先直接读 rec.app.type，缩一下内核面板就抛 TypeError，连后面的
+    // saveWindows() 一起被跳过 —— 缩放结果没落盘。
+    var size = Math.round(g.w) + ' × ' + Math.round(g.h);
+    rec.subtitle.textContent = (rec.app && rec.app.type === 'node')
+      ? 'node · :' + rec.app.port + ' · ' + size
+      : size;
   }
 
   function bindGlobal(move, end) {
@@ -3084,7 +3114,11 @@
       if (startMenu) { closeStartMenu(); e.preventDefault(); return; }
       if (openMenu) { closeMenu(); e.preventDefault(); return; }
       var r = activeId ? windows[activeId] : null;
-      if (r && r.fullscreen) { toggleFullscreen(activeId); e.preventDefault(); }
+      if (r && r.fullscreen) { toggleFullscreen(activeId); e.preventDefault(); return; }
+      // 全屏窗口不一定是「活动」窗口（例如刚点完窗口里的按钮、焦点还在别处），
+      // 而 Esc 是退出全屏的救急键 —— 只要还有全屏窗口就让它退出来。
+      var fs = order.filter(function (id) { return windows[id] && windows[id].fullscreen; }).pop();
+      if (fs) { toggleFullscreen(fs); e.preventDefault(); }
       return;
     }
     if (!mod) return;
@@ -3417,7 +3451,7 @@
     order.forEach(function (id) {
       var rec = windows[id];
       if (!rec) return;
-      if (rec.fullscreen) { applyGeom(rec, { x: 0, y: 0, w: viewport().w, h: viewport().h }); return; }
+      if (rec.fullscreen) { applyGeom(rec, { x: 0, y: 0, w: wa.w, h: wa.h }); return; }
       if (rec.maximized) { applyGeom(rec, { x: 0, y: 0, w: wa.w, h: wa.h }); return; }
       // 与拖动同一套约束：窗口完整留在可用区内
       var cg = clampGeomToView(currentGeom(rec));

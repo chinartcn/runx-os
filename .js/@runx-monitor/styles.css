@@ -23,7 +23,7 @@
   gap: 10px;
   font: 13px/1.5 var(--rx-font, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif);
   color: var(--rxmon-fg);
-  background: var(--rxmon-bg);
+  background: transparent;   /* 让窗口毛玻璃透出来，别整片糊白 */
   overflow: hidden;
 }
 

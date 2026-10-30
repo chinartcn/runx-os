@@ -17,7 +17,8 @@
   box-sizing: border-box;
   font: 13px/1.5 var(--rx-font, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif);
   color: var(--rxfile-fg);
-  background: var(--rxfile-bg);
+  /* 根节点不铺底：窗口的毛玻璃就是它的底（--rxfile-bg 留给需要实体感的局部） */
+  background: transparent;
   overflow: hidden;
 }
 

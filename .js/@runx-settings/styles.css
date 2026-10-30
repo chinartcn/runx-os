@@ -16,7 +16,7 @@
   box-sizing: border-box;
   font: 13px/1.55 var(--rx-font, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif);
   color: var(--rxset-fg);
-  background: var(--rxset-bg);
+  background: transparent;   /* 让窗口毛玻璃透出来，别整片糊白 */
   position: relative;
   overflow: hidden;
 }

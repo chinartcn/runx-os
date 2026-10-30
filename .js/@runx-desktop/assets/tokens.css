@@ -558,3 +558,35 @@
     --surface-card: rgba(255, 255, 255, 0.12);
   }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * 扩展面板的令牌别名层（--rx-*）
+ *
+ * @runx-files / @runx-monitor / @runx-settings 三个面板用的是更短的变量名
+ * （--rx-surface / --rx-text / --rx-border …），而外壳从来没定义过它们 ——
+ * 于是每个 var() 都落到自己的回退值上（#ffffff / #1a1a1a）。具体后果：
+ *   · 面板在自己那块纯白底上铺满整个窗口，"毛玻璃"被整片盖死；
+ *   · 深色主题下更糟：窗口是深色玻璃，内容区却是一块惨白，而任何继承外壳
+ *     令牌的文字（深色下 --label-primary 是白的）落在白底上直接白字白底。
+ *
+ * 这里只做**别名**，不复制色值：全部指向语义令牌。CSS 变量在使用处解析，
+ * 所以主题切换、高对比度覆盖改哪个，面板就跟着变 —— 不需要第二份深浅色清单
+ * （那种"改一处漏两处"的坑在深色令牌上已经踩过一次）。
+ *
+ * --rx-surface 指卡片面而不是窗口面：面板根节点自己不该再铺一层底
+ * （窗口的 .rx-material-* 就是它的底），但吸顶表头、弹出层、下拉框这些
+ * 需要一点实体感的局部，正好用得上这层半透明卡片面。
+ * ═══════════════════════════════════════════════════════════════════════ */
+#runx-desktop {
+  --rx-surface:  var(--surface-card);
+  --rx-text:     var(--label-primary);
+  --rx-text-dim: var(--label-secondary);
+  --rx-border:   var(--hairline);
+  --rx-fill:     var(--surface-hover);
+  --rx-accent:   var(--accent);
+  --rx-red:      var(--semantic-red);
+  --rx-green:    var(--semantic-green);
+  --rx-yellow:   var(--semantic-yellow);
+  --rx-font:     var(--font-sans);
+  --rx-mono:     var(--font-mono);
+}

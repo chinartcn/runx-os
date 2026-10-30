@@ -419,6 +419,13 @@
   border-radius: 0;
   border-color: transparent;
 }
+/* 全屏时收起系统 chrome（导航条 / Dock），桌面层让出整块视口。
+   窗口是 .rx-surface 的子节点，surface 本身是「导航条下沿 → Dock 上沿」，
+   不把这两个让开，窗口再怎么写尺寸也铺不满 —— 而且多出来的高度会被
+   surface 的 overflow 悄悄裁掉。 */
+#runx-desktop[data-fullscreen="1"] .rx-menubar,
+#runx-desktop[data-fullscreen="1"] .rx-dock { display: none; }
+#runx-desktop[data-fullscreen="1"] .rx-surface { top: var(--safe-top); bottom: 0; }
 
 /* ── 工具栏（§3.1 / §3.3）──
    三种样式：unified（默认，控件与标题同一行）
@@ -470,6 +477,12 @@
   gap: 7px;
   flex: none;
   padding-right: 2px;
+  /* 八向缩放手柄 z-index 70，且角上的手柄在触屏下放大到 22×22 ——
+     正好压住左上角的关闭圆点，点下去变成「缩放」而不是「关闭」
+     （手机紧凑工具栏只有 30px 高，圆点几乎整个落在手柄里）。
+     控件必须压在抓手之上：顶部边缘该缩放的区域只在按钮以外的地方让给手柄。 */
+  position: relative;
+  z-index: 71;
 }
 #runx-desktop .rx-dot {
   width: 12px; height: 12px;
@@ -535,6 +548,9 @@
   gap: 3px;
   flex: none;
   margin-left: auto;
+  /* 同 .rx-win-dots：压在缩放手柄之上，否则右上角的 ne 手柄会吃掉全屏按钮 */
+  position: relative;
+  z-index: 71;
 }
 #runx-desktop .rx-tool-sep {
   width: 0.5px; height: 15px;
@@ -1299,7 +1315,11 @@
 #runx-desktop .rx-win-body.rx-win-panel {
   display: block;
   padding: 0;
-  background: var(--surface, #fff);
+  /* 不能给不透明底：这一层正好盖住窗口的 .rx-material-regular，
+     一旦涂成 #fff，毛玻璃就整片看不见了（深色主题下还是一块白板）。
+     面板内容直接坐在窗口材质上，局部需要实体感的地方由面板自己用
+     --rx-surface（半透明卡片面）表达。 */
+  background: transparent;
   overflow: hidden;
 }
 #runx-desktop .rx-panel-host {
