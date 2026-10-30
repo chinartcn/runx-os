@@ -282,7 +282,8 @@
         break;
       case 'resized':
         if (state.sessions[msg.sessionId]) setLabel(msg.sessionId, 'shell ' + msg.cols + 'x' + msg.rows);
-        // 重建会话等事件提示显示在终端区域的浮层，而不是写进终端里
+        // 正常 resize 不发 note（真终端调整尺寸本来无声）；只有后端回落到
+        // 「重建会话」时才会带 note，用浮层提示而不是写进终端内容里。
         if (msg.note) hint(msg.note);
         break;
       case 'error':

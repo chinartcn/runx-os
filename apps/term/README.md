@@ -44,16 +44,30 @@ script -qfec 'stty rows <R> cols <C> 2>/dev/null; exec bash -i' /dev/null
 - 初始尺寸：`script` 没有「设尺寸」的命令行选项，我们在 PTY 内先 `stty rows/cols`
   再 `exec` 进 shell，从而让初始 winsize 真正生效。
 
-### 2. resize 为什么是「重建会话」
+### 2. resize 为什么不重建会话
 
-`script` 分配 PTY 后，本进程没有那个 master fd，**无法 ioctl(TIOCSWINSZ) 动态改尺寸**。
-（设置 `COLUMNS`/`LINES` 环境变量只影响 readline 的显示宽度，不改变内核 tty winsize。）
+`script` 分配 PTY 后，本进程没有那个 master fd，**不能直接 ioctl(TIOCSWINSZ)**。
+（顺便一提：设置 `COLUMNS`/`LINES` 环境变量只影响 readline 的显示宽度，不改变内核 tty winsize。）
 
-因此 resize 策略是：**杀掉旧 shell、按新尺寸重启一个，保留 sessionId 与前端 scrollback**。
-前端在终端区域底部的浮层（不写入终端内容）提示：`已按 N×M 重建会话（前台程序已重启）`。
+但「拿不到 master」不等于「改不了尺寸」：winsize 是内核设备属性，**只要知道 slave 设备路径，
+任何进程都能用 `stty -F /dev/pts/N rows R cols C` 去 ioctl**，内核随即向该 PTY 的前台进程组
+发 `SIGWINCH` —— 这正是 xterm / gnome-terminal 等真终端 resize 时做的事。
 
-> 代价：resize 会结束前台正在运行的程序（如 `vim`）。这换来的是零原生依赖能在 Termux 跑。
-> 若你愿意装原生模块，可把 `lib/pty.js` 换成 node-pty 并实现真正的 `resize()`。
+所以启动时让内层 shell 把 `tty` 的输出写进一个临时文件（输出重定向到文件，不进 PTY 流），
+Node 侧轮询读一次得到 slave 路径，之后每次 resize 只跑一条 `stty`：
+
+- shell 进程、cwd、变量、命令历史**全部原地保留**
+- 前台程序（`vim` / `top` / `ssh` / 正在跑的构建）收到 `SIGWINCH` 自适应重绘，不被结束
+- 拖动窗口边缘连续触发十几次 resize 也毫无感知
+
+> 之前之所以是「杀掉重开」，是因为只知道没有 master fd 就停在了这一步。实测
+> `stty -F` 在 GNU coreutils 与 util-linux 上都可用；BusyBox 不认 `-F`，则把 slave
+> 设备直接接到 `stty` 的 stdin 上，效果相同。
+
+**回落**：拿不到 slave 路径（异常 shell、非 `/dev/pts` 环境）或 `stty` 不可用时，
+仍会退回「按新尺寸重建会话」，并在浮层提示
+`已按 N×M 重建会话（当前环境不支持原地改尺寸，前台程序已重启）`。
+`GET /health` 的 `resize` 字段会报 `inplace` 或 `respawn`，便于排查实际走的是哪条路。
 
 ### 3. 进程回收
 
@@ -63,7 +77,7 @@ script -qfec 'stty rows <R> cols <C> 2>/dev/null; exec bash -i' /dev/null
 2. 500ms 后 `SIGKILL` 整组 —— 交互式 shell 常忽略 SIGTERM，必须强杀；
 3. 扫 `/proc/*/stat` 找 `pgrp === pid` 的残留进程逐个 `SIGKILL` 兜底。
 
-关闭窗口 / resize 重建 / 进程退出（signal 钩子）都走这套，实测残留为 0。
+关闭窗口 / 回落重建 / 进程退出（signal 钩子）都走这套，实测残留为 0。
 
 ### 4. WebSocket
 
@@ -142,8 +156,9 @@ curl -s -X POST http://127.0.0.1:4125/runx/desktop/icons \
 
 ## 已知局限
 
-1. **resize 会重建会话**：前台交互程序（`vim`/`top`/`ssh`）会被结束；提示显示在
-   终端区域浮层（不写入终端内容）。原因见上文 §2，是零原生依赖方案的固有取舍。
+1. **resize 在极端环境下会回落重建**：正常情况下（GNU / BusyBox `stty` 可用、PTY 在
+   `/dev/pts` 下）resize 是原地 ioctl，前台程序不受影响；只有拿不到 slave 路径时才会
+   退回「重建会话」并结束 `vim`/`top`/`ssh`。原因与判定方式见上文 §2。
 2. **不随桌面自动停靠**：`appex.json` 里 `autostart:false`；窗口关闭后后端仍在跑，
    会话保留 30 分钟（无连接空闲）后回收。
 3. **进程重启后 sessionId 失效**：后端重启后旧会话不存在，前端重连时 `resume` 只能恢复

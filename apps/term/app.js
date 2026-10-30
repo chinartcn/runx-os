@@ -16,7 +16,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const ws = require('./lib/ws');
-const { SessionManager, probeScript, MAX_SESSIONS, GRACE_MS } = require('./lib/pty');
+const { SessionManager, probeScript, probeSttyFileMode, MAX_SESSIONS, GRACE_MS } = require('./lib/pty');
 
 const PORT = Number(process.env.PORT) || 3460;
 const HOST = process.env.TERM_HOST || '0.0.0.0';
@@ -148,13 +148,21 @@ async function doResize(conn, msg) {
   if (!cols || !rows) return;
   if (cols === s.cols && rows === s.rows) return; // 尺寸未变，忽略
 
-  // script 无法动态改 PTY 尺寸 → 重建会话（保留 id 与前端 scrollback）
+  // 正常路径：用 stty 对已开 PTY 发 ioctl(TIOCSWINSZ)，内核随即向前台
+  // 进程组发 SIGWINCH。shell 变量、cwd、历史、前台程序（vi / top / ssh）
+  // 全部原地保留 —— 这才是真终端的 resize 语义。
+  if (await s.setSize(cols, rows)) {
+    // 成功时**不发 note**：真终端调整尺寸本来就是无声的。
+    broadcast(s.id, { type: 'resized', sessionId: s.id, cols: s.cols, rows: s.rows });
+    return;
+  }
+
+  // 回落：拿不到 PTY slave 路径或 stty 不可用（受限容器 / 非 /dev/pts），
+  // 只能沿用“重建会话”。这种情况必须告诉用户前台程序被重启了。
   await sessions.respawn(s.id, cols, rows);
-  // 重建提示不再写进终端（避免污染 shell 输出 / scrollback），改为随 resized
-  // 下发 note 字段，由前端在终端区域的浮层（#hint）里显示。
   broadcast(s.id, {
     type: 'resized', sessionId: s.id, cols: s.cols, rows: s.rows,
-    note: '已按 ' + s.cols + '×' + s.rows + ' 重建会话（前台程序已重启）',
+    note: '已按 ' + s.cols + '×' + s.rows + ' 重建会话（当前环境不支持原地改尺寸，前台程序已重启）',
   });
 }
 
@@ -228,7 +236,12 @@ const server = http.createServer((req, res) => {
 
   if (p === '/healthz' || p === '/health') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
-    return res.end(JSON.stringify({ ok: true, pid: process.pid, sessions: sessions.size, uptime_ms: Date.now() - START_TS, pty: !!probeScript() }));
+    return res.end(JSON.stringify({
+      ok: true, pid: process.pid, sessions: sessions.size, uptime_ms: Date.now() - START_TS,
+      pty: !!probeScript(),
+      // resize 方式：inplace = 原地 ioctl（不重启前台程序）；respawn = 回落重建
+      resize: probeSttyFileMode() ? 'inplace' : 'respawn',
+    }));
   }
   if (p === '/' || p === '/index.html') return serveStatic(res, 'index.html');
   if (p.startsWith('/assets/')) return serveStatic(res, p.slice('/assets/'.length));

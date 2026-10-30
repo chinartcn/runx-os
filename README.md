@@ -104,7 +104,8 @@ RunX OS
 一个**真终端**：后端起真正的 `bash -i`，前端 xterm.js 渲染，零原生依赖（用 util-linux 的 `script` 伪 PTY 替代 node-pty）。
 
 - 支持多标签、主题（深/浅）、字号调节、窗口缩放自适应。
-- resize 采用「重建会话」策略（保留 scrollback），详见 `apps/term/README.md`。
+- resize 原地改 PTY 尺寸（`stty -F <slave>` 触发 ioctl + SIGWINCH）：前台程序与 shell 状态
+  全部保留，不重启进程。仅拿不到 slave 路径时才回落「重建会话」，详见 `apps/term/README.md`。
 - 进程清理：SIGTERM → SIGKILL → `/proc` 扫描兜底，关闭窗口无僵尸。
 
 ---
@@ -342,7 +343,9 @@ ETag 304 协商。内联的 CSS 在导出前会把相对 `url()` 改写成绝对
 
 ## 已知局限
 
-1. **resize 会重建终端会话**：前台交互程序（`vim`/`top`/`ssh`）会重启。这是零原生依赖（不用 node-pty）的固有取舍。
+1. **resize 在极端环境下会回落重建**：正常情况是原地改尺寸，`vim`/`top`/`ssh` 不受影响；只有拿不到
+   PTY slave 路径（非 `/dev/pts` 环境、`stty` 不可用）时才退回重建会话。`GET /health` 的
+   `resize` 字段可查实际走的是 `inplace` 还是 `respawn`。
 2. **Termux / Android 上的 `fs.watch` 不可靠**：`watch` 已内置防抖 + 基于 `fs.stat` 的降级轮询兜底。
 3. **单机单用户假设**：内核未内置鉴权；若要暴露到公网，请置于反向代理 + 鉴权之后。
 4. **窗口「隐藏」状态不持久化**：`⌘H` 隐藏是**临时**操作，刷新后窗口会回来（这与最小化不同 ——
