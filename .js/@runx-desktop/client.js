@@ -1393,8 +1393,13 @@
     w.appendChild(toolbar);
     w.appendChild(body);
 
+    /* — 八向缩放手柄（与 openApp 一致：data-dir 供 CSS 定位，绑定才可拖动）— */
     ['n', 's', 'w', 'e', 'nw', 'ne', 'sw', 'se'].forEach(function (dir) {
-      w.appendChild(el('div', 'rx-win-resize ' + dir));
+      var rh = el('div', 'rx-win-resize');
+      rh.dataset.dir = dir;
+      rh.addEventListener('mousedown', function (e) { startResize(e, key, dir); });
+      rh.addEventListener('touchstart', function (e) { startResize(e, key, dir); }, { passive: false });
+      w.appendChild(rh);
     });
 
     var rec = {
