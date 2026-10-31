@@ -1,0 +1,33 @@
+{
+  "name": "@runx/host",
+  "version": "0.1.0",
+  "description": "RunX 桌面 API：通知、窗口、主题、事件总线。零依赖，应用侧单文件。",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "runx",
+    "desktop",
+    "ipc",
+    "event-bus",
+    "notify"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chinartcn/runx-os.git",
+    "directory": "packages/runx-host"
+  },
+  "scripts": {
+    "pack": "npm pack"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "license": "MIT"
+}
