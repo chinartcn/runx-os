@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "name": "store",
+  "version": "1.0.0",
+  "type": "node",
+  "entry": "app.js",
+  "port": 3480,
+  "display_name": "应用商店",
+  "icon": "public/icon.svg",
+  "description": "RunX 应用商店：浏览、搜索、上架与安装应用。直接请求商店 API，安装走内核安全通道。",
+  "restart": "on-failure",
+  "restart_delay_ms": 1000,
+  "restart_max": 3,
+  "restart_window_ms": 60000,
+  "autostart": false,
+  "data_dir": "data"
+}

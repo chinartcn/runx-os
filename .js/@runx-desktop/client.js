@@ -2577,7 +2577,9 @@
         } },
       { label: '应用商店', glyph: 'package', act: function () {
           closeStartMenu();
-          if (window.RunX && RunX.store) RunX.store.open();
+          // 商店是原生应用（apps/store），跟终端、示例一样是个真窗口 ——
+          // 不是桌面里的一块面板。能拖、能缩、能最小化，还能切到别的应用再切回来。
+          openApp('store');
         } },
       { label: '桌面设置…', glyph: 'settings', key: '⌘,', act: openSettings },
       { sep: true },

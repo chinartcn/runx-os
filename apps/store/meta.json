@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "name": "store",
+  "display_name": "应用商店",
+  "version": "1.0.0",
+  "summary": "浏览、搜索、安装 RunX 应用。开发者自带干粮，商店只做指路明灯。",
+  "description": "RunX 应用商店（原生应用）\n\n· 列表与详情**直接请求商店 API**（api.rtcnnavext.de5.net），不经过内核\n· 安装 / 更新 / 卸载走内核特权通道 —— 安全解包，拒软链、绝对路径与 ../\n· 下载由商店的 /api/proxy 代劳，整包不经过浏览器\n· 开发者面板：登录账号、一键把 meta.json 同步上架\n· 包在开发者自己的源上，商店不存包 —— 零服务器成本",
+  "category": "tool",
+  "author": "chinartcn",
+  "homepage": "https://store.rtcnnavext.de5.net/",
+  "repo": "https://github.com/chinartcn/runx-os",
+  "license": "MIT",
+  "icon": "public/icon.svg",
+  "permissions": [],
+  "source": {
+    "type": "github",
+    "url": "https://github.com/chinartcn/runx-os",
+    "download": "https://github.com/chinartcn/runx-os/archive/refs/heads/main.tar.gz",
+    "subdir": "apps/store"
+  }
+}

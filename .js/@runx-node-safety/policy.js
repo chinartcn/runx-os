@@ -37,6 +37,27 @@ const KERNEL_PKGS = (() => {
     .filter((d) => { try { return fs.statSync(d).isDirectory(); } catch (e) { return false; } });
 })();
 
+/**
+ * 系统包的**挂载点**也要可读：<root>/node_modules/@runx/。
+ *
+ * 为什么软链的真实路径放行了还不够：Node 解析 require('@runx/sdk') 时，
+ * 先读的是「node_modules/@runx/sdk/package.json」这个**软链路径**，读到了
+ * 才顺着软链去 packages/。Node 的 --allow-fs-read 按字面路径判定，
+ * 软链路径不在名单里 → ERR_ACCESS_DENIED。
+ *
+ * 只放行 @runx 这个作用域目录，不放行整个 node_modules ——
+ * 后者会把应用自己装的那些包（可能很大、可能有敏感内容）全放进来，
+ * 那就不是围栏了。
+ *
+ * 装在应用自己目录里的软链不受影响：那条路径在应用的 cwd 里，
+ * 已经被 baseline 的「读自身目录」覆盖了。
+ */
+const KERNEL_SCOPE_LINKS = (() => {
+  const root = path.resolve(__dirname, '../..');
+  const dir = path.join(root, 'node_modules', '@runx');
+  try { return fs.statSync(dir).isDirectory() ? [dir] : []; } catch (e) { return []; }
+})();
+
 let probeCache = null;
 
 /**
@@ -85,6 +106,42 @@ function toNodePath(scope, cwd) {
 function uniq(list) { return Array.from(new Set(list.filter(Boolean))); }
 
 /**
+ * 去掉被别的路径**包含**的窄路径 —— 只对读路径用。
+ *
+ * 为什么读路径要去嵌套：Node 的权限模型里，一条更具体的 --allow-fs-read
+ * 会**遮蔽**更宽的一条。给父目录和子目录同时开权限，结果是读父目录被拒 ——
+ * 这跟直觉正好相反。
+ *
+ * 实测（Node 22）：
+ *   --allow-fs-read=/apps            → readdir(/apps) 通过
+ *   --allow-fs-read=/apps --allow-fs-read=/apps/foo
+ *                                    → readdir(/apps) ERR_ACCESS_DENIED
+ *   --allow-fs-read=/apps/foo        → readdir(/apps) 也被拒
+ *
+ * 对应用的实际影响：它声明了 fs.read:../**（要读同级的其他应用），
+ * 而基线又自动加了 cwd（它自己的目录，正好是 ../** 的子路径）——
+ * 于是「读同级应用」这条路被自己的目录挡死了。症状是扫出来 0 个应用，
+ * 而权限声明看起来完全正确。
+ *
+ * 写路径不适用这套：实测父+子并存时两边都能写，只给父也能写子。
+ * 所以写路径保持原样（见 plan 里的 uniq(writes)）。
+ */
+function dropNested(paths) {
+  const list = uniq(paths);
+  const out = [];
+  for (const p of list) {
+    const covered = list.some((q) => {
+      if (p === q) return false;
+      // q 覆盖 p：q 是 p 的祖先目录
+      const a = q.endsWith(path.sep) ? q : q + path.sep;
+      return p.startsWith(a);
+    });
+    if (!covered) out.push(p);
+  }
+  return out;
+}
+
+/**
  * 计算一个应用的启动参数。
  *
  * @param {{name:string, cmd:string, cwd:string, data_dir?:string, permissions?:string[], env?:object}} app
@@ -116,11 +173,11 @@ function plan(app, cfg) {
   const data = path.join(cwd, app.data_dir || 'data');
   const declared = declaredIn;
 
+  // 基线：读自己的目录、写自己的 data。
   const reads = [cwd];
   const writes = [data];
   let childProcess = false;
-  let worker = false;
-  let addons = false;
+  let worker = false;  let addons = false;
   const notes = [];
 
   // 没有声明权限的应用：给最小基线（读自己、写 data），并明确标注这是基线
@@ -160,6 +217,8 @@ function plan(app, cfg) {
 
   // SDK 所在的目录：无论应用怎么挂的（软链 / 复制 / 相对路径安装），都得能读
   for (const d of KERNEL_PKGS) reads.push(d);
+  // 系统包的软链挂载点（node_modules/@runx/）—— 解析软链路径本身也要能读
+  for (const d of KERNEL_SCOPE_LINKS) reads.push(d);
 
   // 全局附加目录：extra 只读（放证书、字体这类共享资源），extra_write 才给写
   for (const p of (conf.extra || [])) {
@@ -172,7 +231,9 @@ function plan(app, cfg) {
   }
 
   const argvFlags = [rt.flag];
-  for (const p of uniq(reads)) argvFlags.push('--allow-fs-read=' + p);
+  // 读路径去嵌套：更具体的路径会遮蔽更宽的，只留最宽的那些（见 dropNested）
+  for (const p of dropNested(reads)) argvFlags.push('--allow-fs-read=' + p);
+  // 写路径不去嵌套：实测父+子并存时两边都能写，剔掉窄的反而会丢权限
   for (const p of uniq(writes)) argvFlags.push('--allow-fs-write=' + p);
   if (childProcess) argvFlags.push('--allow-child-process');
   if (worker) argvFlags.push('--allow-worker');

@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "name": "runx-dev",
+  "version": "1.0.0",
+  "type": "node",
+  "entry": "app.js",
+  "port": 3481,
+  "display_name": "RunX Dev",
+  "icon": "public/icon.svg",
+  "description": "开发者服务：本地包管理 + 一键上架。管理本机应用、校验 meta.json、把应用同步到商店。",
+  "restart": "on-failure",
+  "restart_delay_ms": 1000,
+  "restart_max": 3,
+  "restart_window_ms": 60000,
+  "autostart": false,
+  "data_dir": "data",
+  "permissions": [
+    "fs.read:../**",
+    "fs.write:./data/**"
+  ]
+}

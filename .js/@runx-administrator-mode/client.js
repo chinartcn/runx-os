@@ -93,6 +93,8 @@
       off.type = 'button';
       off.addEventListener('click', function () { disable(); });
       band.appendChild(off);
+      bindDrag(band);
+      applyBandPos();
     }
     var leftEl = document.getElementById('rxam-left');
     if (leftEl) leftEl.textContent = '剩余 ' + clock(state.until - Date.now());
@@ -106,6 +108,152 @@
         if (remain <= 0) { apply({ on: false }); }
       }, 1000);
     }
+  }
+
+  /* ═══════════════════════════════════════════════════════════════
+   * 拖走红条
+   *
+   * 起因很实在：红条原本固定在顶部正中，**压着顶栏**（40px 高的导航条）。
+   * 顶栏左边是开始菜单入口，右边是状态区 —— 红条一开，这两处都点不着。
+   * 管理员模式恰恰是你在**干别的事**的时候开的（要装个包、要改个配置），
+   * 于是「开着管理员模式就用不了桌面」，本末倒置。
+   *
+   * 所以红条改成可拖的：按住拖到别处去，不挡事。位置记在 localStorage，
+   * 刷新后还在原地 —— 每次都要重新拖一遍是欠考虑。
+   *
+   * 拖动时用 transform，不改 left/top：transform 走合成层，拖起来不掉帧，
+   * 也不会触发布局重算（红条是 fixed，改 left/top 会带着整个视口重排）。
+   * ═══════════════════════════════════════════════════════════════ */
+
+  var POS_KEY = 'runx.admin.band.pos';
+  var dragging = false;
+  var dragFrom = null;    // 按下时的指针坐标
+  var dragBase = null;    // 按下时红条中心的位置
+  var dragEnd = null;     // 当前算出来的红条中心位置（落盘用）
+  var dragMoved = false;  // 是否真的移动过（区分「点击」与「拖动」）
+
+  /** 读回上次拖到哪儿了。没有就用默认（顶部正中）。 */
+  function readPos() {
+    try {
+      var raw = localStorage.getItem(POS_KEY);
+      if (!raw) return null;
+      var p = JSON.parse(raw);
+      if (!p || typeof p.x !== 'number' || typeof p.y !== 'number') return null;
+      return p;
+    } catch { return null; }
+  }
+
+  function writePos(p) {
+    try { localStorage.setItem(POS_KEY, JSON.stringify(p)); } catch { /* 隐私模式等 */ }
+  }
+
+  function clearPos() {
+    try { localStorage.removeItem(POS_KEY); } catch { /* 忽略 */ }
+  }
+
+  /** 把记住的位置套到红条上 */
+  function applyBandPos() {
+    if (!band) return;
+    var p = readPos();
+    if (!p) {
+      band.classList.remove('rxam-moved');
+      band.style.left = '50%';
+      band.style.top = '6px';
+      band.style.setProperty('--rxam-x', '-50%');
+      band.style.setProperty('--rxam-y', '0px');
+      return;
+    }
+    // 记的是「红条中心点」，定位交给 CSS 的 translate(-50%,-50%) ——
+    // 用百分比平移居中，就不用知道红条多宽。
+    //
+    // 为什么不能拿 offsetWidth 换算：字体还没加载完时量出来的宽度是错的
+    // （Inter 到位后宽度会变），刷新后位置就会偏几十像素。现在这套
+    // 「中心点 + 百分比平移」与宽度无关，字体什么时候到都不影响。
+    band.classList.add('rxam-moved');
+    band.style.left = '0px';
+    band.style.top = '0px';
+    band.style.setProperty('--rxam-x', p.x + 'px');
+    band.style.setProperty('--rxam-y', p.y + 'px');
+  }
+
+  function bindDrag(node) {
+    node.addEventListener('pointerdown', function (e) {
+      // 只认左键；按钮上的 pointerdown 不参与拖动，否则「关闭」会连着拖一下
+      if (e.button !== undefined && e.button !== 0) return;
+      if (e.target && e.target.tagName === 'BUTTON') return;
+      var p = readPos();
+      if (p) {
+        dragBase = { x: p.x, y: p.y };
+      } else {
+        // 没拖过（还在默认位置）：默认是「顶栏正中」，用 getBoundingClientRect
+        // 量真实位置 —— offsetWidth 在字体没加载完时是不准的，
+        // 量出来的中心点会让红条第一次就被拽偏。
+        var r = node.getBoundingClientRect();
+        dragBase = { x: r.left + r.width / 2, y: r.top + r.height / 2 };
+      }
+      dragFrom = { x: e.clientX, y: e.clientY };
+      dragging = true;
+      dragMoved = false;
+      dragEnd = { x: dragBase.x, y: dragBase.y };
+      node.classList.add('rxam-dragging');
+      try { node.setPointerCapture(e.pointerId); } catch { /* 老浏览器 */ }
+      e.preventDefault();
+    });
+
+    node.addEventListener('pointermove', function (e) {
+      if (!dragging) return;
+      var dx = e.clientX - dragFrom.x;
+      var dy = e.clientY - dragFrom.y;
+      if (!dragMoved && Math.abs(dx) < 3 && Math.abs(dy) < 3) return;  // 抖动不算拖
+      dragMoved = true;
+      var rect = node.getBoundingClientRect();
+      var w = rect.width || 200;
+      var h = rect.height || 24;
+      // 基准是「按下那一刻的位置」，全程不变；红条位置 = 基准 + 指针总位移。
+      //
+      // 为什么不能每帧更新基准（那看着像更常见的写法）：pointermove 的坐标是
+      // **相对按下点**的总位移，不是增量。如果基准也跟着走，每一帧都会把
+      // 「已经移动过的距离」再加一遍 —— 拖 300px 会跑出 3000px，
+      // 表现为红条甩到边角停住。基准不动就没有这个问题。
+      var nx = dragBase.x + dx;
+      var ny = dragBase.y + dy;
+      // 夹在视口内：不能拖到屏幕外找不回来，也不能被拖到只剩一条边
+      nx = Math.max(w / 2 + 4, Math.min(window.innerWidth - w / 2 - 4, nx));
+      ny = Math.max(h / 2 + 4, Math.min(window.innerHeight - h / 2 - 4, ny));
+      node.classList.add('rxam-moved');
+      node.style.left = '0px';
+      node.style.top = '0px';
+      // 定位交给 CSS 的 translate(-50%,-50%)：中心点直接给，不需要减去宽高
+      node.style.setProperty('--rxam-x', nx + 'px');
+      node.style.setProperty('--rxam-y', ny + 'px');
+      // 记住最终位置（供 pointerup 落盘）；拖动基准 dragBase 保持不动
+      dragEnd = { x: nx, y: ny };
+    });
+
+    function endDrag(e) {
+      if (!dragging) return;
+      dragging = false;
+      node.classList.remove('rxam-dragging');
+      try { node.releasePointerCapture(e.pointerId); } catch { /* 忽略 */ }
+      if (!dragMoved) return;
+      writePos(dragEnd || dragBase);
+    }
+    node.addEventListener('pointerup', endDrag);
+    node.addEventListener('pointercancel', endDrag);
+
+    /* 双击：拖回默认位置（顶部正中）。
+       拖走了之后想「恢复原样」不该去翻设置 —— 双击是桌面里的通用手势。 */
+    node.addEventListener('dblclick', function () {
+      clearPos();
+      applyBandPos();
+      toast('红条已归位');
+    });
+
+    // 视口尺寸变了（转屏、缩放）：记住的位置按比例挪，别让它跑到屏幕外
+    window.addEventListener('resize', function () {
+      if (dragging) return;
+      applyBandPos();
+    });
   }
 
   function apply(s) {

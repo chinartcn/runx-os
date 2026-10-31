@@ -23,7 +23,7 @@ const fs = require('fs');
 const path = require('path');
 
 // 内核端口：从请求头取实际监听端口，避免打到同机上的另一个实例
-const { gwPortOf } = require('../@runx-store/gateway');
+const { gwPortOf } = require('../../lib/gateway');
 
 const ASSETS_PREFIX = API + '/desktop-assets/';
 

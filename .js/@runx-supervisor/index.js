@@ -340,6 +340,43 @@ module.exports = {
     };
   },
 
+  /**
+   * 内核退出时把子进程一并带走。
+   *
+   * ── 不做会怎样 ──────────────────────────────────────────────
+   * 子进程是内核 spawn 出来的，进程树挂在内核下面。内核一走，它们不会跟着走 ——
+   * 变成孤儿，继续占着端口、继续跑着业务逻辑。
+   *
+   * 症状很具体：重启内核后，supervisor 以为应用没在跑（内存状态清空了），
+   * 又去起一个 —— 端口被孤儿占着，新进程 EADDRINUSE 退出，重启预算耗尽后
+   * 标记 failed。日志里刷满 EADDRINUSE，但真正的原因是「上一轮的进程还在」。
+   *
+   * ── 为什么用 SIGTERM 而不是 SIGKILL ──────────────────────────
+   * 给应用一点时间自己收尾（关文件、刷缓冲）。SIGTERM 之后还有 SIGKILL 兜底：
+   * 有的应用不响应 SIGTERM，不能让它把内核的退出卡住。
+   */
+  onDispose(ctx) {
+    const list = Array.from(runtime.entries());
+    if (!list.length) return;
+    ctx.log(`内核退出：终止 ${list.length} 个应用进程`);
+
+    for (const [name, rt] of list) {
+      if (!rt || rt.state !== 'running' || !rt.pid) continue;
+      try { process.kill(rt.pid, 'SIGTERM'); }
+      catch { /* 进程可能已经自己退了 */ }
+    }
+
+    // 给 1.5 秒收尾；不响应 SIGTERM 的用 SIGKILL 强制走
+    const timer = setTimeout(() => {
+      for (const [name, rt] of runtime) {
+        if (!rt || rt.state !== 'running' || !rt.pid) continue;
+        try { process.kill(rt.pid, 'SIGKILL'); }
+        catch { /* 已经退了 */ }
+      }
+    }, 1500);
+    if (timer.unref) timer.unref();
+  },
+
   onRequest(req, url, ctx) {
     const p = url.pathname;
     if (!p.startsWith(API + '/apps') || !S) return undefined;

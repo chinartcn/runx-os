@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "name": "runx-dev",
+  "display_name": "RunX Dev",
+  "version": "1.0.0",
+  "summary": "开发者服务：包管理器 + 上架助手。管本机应用、校验 meta.json、一键上架。",
+  "description": "RunX Dev —— 开发者服务应用\n\n三块能力：\n\n· **包管理器**：扫描本机 apps/ 目录，读 appex.json / meta.json，校验清单，看运行状态\n· **清单生成**：从 appex.json 自动生成商店用的 meta.json，自动算 SHA256\n· **上架助手**：登录开发者账号，一键把 meta.json 同步到商店，看自己的应用\n\n上架时 meta.json 需要一个公网可拉的地址 —— 商店在云端拉它。包始终在开发者自己的源上，商店只存元数据。",
+  "category": "dev",
+  "author": "chinartcn",
+  "homepage": "https://github.com/chinartcn/runx-os",
+  "repo": "https://github.com/chinartcn/runx-os",
+  "license": "MIT",
+  "icon": "public/icon.svg",
+  "permissions": [
+    "fs.read:../**",
+    "fs.write:./data/**"
+  ],
+  "source": {
+    "type": "github",
+    "url": "https://github.com/chinartcn/runx-os",
+    "download": "https://github.com/chinartcn/runx-os/archive/refs/heads/main.tar.gz",
+    "subdir": "apps/runx-dev"
+  }
+}

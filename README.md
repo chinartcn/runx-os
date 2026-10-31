@@ -688,8 +688,8 @@ ETag 304 协商。内联的 CSS 在导出前会把相对 `url()` 改写成绝对
 #### 从商店装到 RunX OS
 
 ```
-商店面板点「安装」
-  → @runx-store  取下载地址 + source_subdir，套一层 /api/proxy
+商店应用点「安装」
+  → apps/store    取下载地址 + source_subdir，套一层 /api/proxy
   → @runx-pax     下载 → 安全解包 → 定位应用 → 落盘 → 写 apps.json
   → supervisor    按 appex.json 起进程，套上权限围栏
 ```

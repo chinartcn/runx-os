@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>应用商店 · RunX</title>
+<link rel="icon" href="icon.svg">
+<link rel="stylesheet" href="store.css">
+</head>
+<body>
+<div class="rxst-shell">
+  <header class="rxst-top">
+    <div class="rxst-brand">
+      <img class="rxst-logo" src="icon.svg" alt="">
+      <div>
+        <h1>应用商店</h1>
+        <p class="rxst-tag">开发者自带干粮，商店只做指路明灯</p>
+      </div>
+    </div>
+    <div class="rxst-search">
+      <input id="q" type="search" placeholder="搜索应用…（按名称、简介、分类）" autocomplete="off">
+    </div>
+    <nav class="rxst-tabs" id="tabs">
+      <button class="rxst-tab on" data-cat="">全部</button>
+      <button class="rxst-tab" data-cat="tool">工具</button>
+      <button class="rxst-tab" data-cat="media">影音</button>
+      <button class="rxst-tab" data-cat="dev">开发</button>
+      <button class="rxst-tab" data-cat="game">游戏</button>
+      <button class="rxst-tab" data-cat="other">其他</button>
+    </nav>
+  </header>
+
+  <main class="rxst-main">
+    <section class="rxst-list" id="list" aria-live="polite">
+      <div class="rxst-loading">正在向商店取数据…</div>
+    </section>
+    <aside class="rxst-detail" id="detail" hidden>
+      <button class="rxst-close" id="closeDetail" title="返回列表" aria-label="返回列表">←</button>
+      <div id="detailBody"></div>
+    </aside>
+  </main>
+
+  <footer class="rxst-foot">
+    <span id="footApi">—</span>
+    <span class="rxst-dot">·</span>
+    <button class="rxst-link" id="btnDev">开发者</button>
+    <span class="rxst-dot">·</span>
+    <button class="rxst-link" id="btnRefresh">刷新</button>
+    <span class="rxst-grow"></span>
+    <span id="footStat">—</span>
+  </footer>
+</div>
+
+<!-- 开发者面板 -->
+<div class="rxst-veil" id="devVeil" hidden>
+  <div class="rxst-dev">
+    <header>
+      <h2>开发者</h2>
+      <button class="rxst-close" id="devClose" aria-label="关闭">×</button>
+    </header>
+    <div id="devBody"></div>
+  </div>
+</div>
+
+<div class="rxst-toast" id="toast"></div>
+
+<script src="store.js"></script>
+</body>
+</html>

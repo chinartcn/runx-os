@@ -19,6 +19,9 @@ node_modules/
 # 示例应用的运行时数据（由 /api/seed 现生成，含一个 4MB 的假大文件）
 /apps/demo/data/
 
+# 应用自己的运行时数据目录（会话、打好的包、日志等）
+/apps/*/data/
+
 # 系统 / 编辑器
 .DS_Store
 .idea/

@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>RunX Dev · 开发者服务</title>
+<link rel="icon" href="icon.svg">
+<link rel="stylesheet" href="dev.css">
+</head>
+<body>
+<div class="rxd-shell">
+  <header class="rxd-top">
+    <img class="rxd-logo" src="icon.svg" alt="">
+    <div>
+      <h1>RunX Dev</h1>
+      <p class="rxd-tag">包管理器 · 上架助手</p>
+    </div>
+    <span class="rxd-grow"></span>
+    <span class="rxd-root" id="rootPath">—</span>
+  </header>
+
+  <nav class="rxd-tabs" id="tabs">
+    <button class="rxd-tab on" data-v="packs">包管理器</button>
+    <button class="rxd-tab" data-v="publish">上架助手</button>
+    <button class="rxd-tab" data-v="account">账号</button>
+  </nav>
+
+  <!-- 包管理器 -->
+  <main class="rxd-main" id="vPacks">
+    <div class="rxd-bar">
+      <button class="rxd-btn sm" id="btnScan">重新扫描</button>
+      <span class="rxd-hint" id="packCount">—</span>
+    </div>
+    <div class="rxd-list" id="packList"></div>
+  </main>
+
+  <!-- 上架助手 -->
+  <main class="rxd-main" id="vPublish" hidden>
+    <div class="rxd-grid">
+      <section class="rxd-card">
+        <h2>选一个应用</h2>
+        <p class="rxd-hint">选好后可以自动生成 meta.json，校验它，再上架。</p>
+        <select id="pubApp" class="rxd-input"></select>
+
+        <h3>meta.json</h3>
+        <textarea id="pubMeta" class="rxd-code" spellcheck="false" placeholder="点「生成」从 appex.json 推导一份"></textarea>
+        <div class="rxd-row">
+          <button class="rxd-btn sm" id="btnGen">生成</button>
+          <button class="rxd-btn sm ghost" id="btnCheck">校验</button>
+          <button class="rxd-btn sm ghost" id="btnSave">保存到应用目录</button>
+        </div>
+        <div id="validateOut" class="rxd-out"></div>
+      </section>
+
+      <section class="rxd-card">
+        <h2>上架</h2>
+        <p class="rxd-hint">
+          商店在云端拉 meta.json，所以它得有一个<strong>公网可拉</strong>的地址。
+          把 meta.json 传到 GitHub / jsDelivr 之类的地方，然后填那个地址。
+        </p>
+        <div class="rxd-field">
+          <label>meta.json 地址</label>
+          <input id="pubUrl" class="rxd-input" placeholder="https://cdn.jsdelivr.net/gh/you/repo@main/apps/xxx/meta.json">
+        </div>
+        <button class="rxd-btn" id="btnPublish">一键上架</button>
+        <div id="publishOut" class="rxd-out"></div>
+
+        <h3>我的应用</h3>
+        <div id="myApps" class="rxd-mine"></div>
+      </section>
+    </div>
+  </main>
+
+  <!-- 账号 -->
+  <main class="rxd-main" id="vAccount" hidden>
+    <div class="rxd-card" style="max-width:420px">
+      <h2>开发者账号</h2>
+      <div id="acctBody"></div>
+    </div>
+  </main>
+
+  <footer class="rxd-foot">
+    <span id="footApi">—</span>
+    <span class="rxd-dot">·</span>
+    <span>包在开发者自己的源上，商店只做指路明灯</span>
+  </footer>
+</div>
+
+<div class="rxd-toast" id="toast"></div>
+<script src="dev.js"></script>
+</body>
+</html>

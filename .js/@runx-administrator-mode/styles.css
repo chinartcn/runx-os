@@ -4,12 +4,20 @@
  * 场景），那时也不能白底白字。
  */
 
-/* ── 常驻红条 ── */
+/* ── 常驻红条 ──
+ * 位置用 CSS 变量 --rxam-x / --rxam-y 承载，而不是直接写 transform。
+ * 原因：入场动画（rxam-in）也要动 transform，两者抢同一个属性 ——
+ * 拖动正好发生在入场那 220ms 里，红条会先按动画飞到中间再被拽走，
+ * 看起来像「弹了一下」。变量分开后，动画动 --rxam-anim，
+ * 拖动动 --rxam-x/--rxam-y，互不干扰。 */
 .rxam-band {
   position: fixed;
   top: 6px;
   left: 50%;
-  transform: translateX(-50%);
+  --rxam-x: -50%;
+  --rxam-y: 0px;
+  --rxam-anim: 0px;
+  transform: translate(var(--rxam-x), var(--rxam-y)) translateY(var(--rxam-anim));
   z-index: 980;                 /* 高于窗口与通知，低于审批框（990 段留给模态） */
   display: flex;
   align-items: center;
@@ -28,8 +36,8 @@
   overflow: hidden;
 }
 @keyframes rxam-in {
-  from { opacity: 0; transform: translate(-50%, -8px); }
-  to   { opacity: 1; transform: translate(-50%, 0); }
+  from { opacity: 0; --rxam-anim: -8px; }
+  to   { opacity: 1; --rxam-anim: 0px; }
 }
 .rxam-ico { font-size: 12px; }
 .rxam-t { font-weight: 650; }
@@ -38,6 +46,35 @@
   opacity: 0.92;
   padding: 0 2px;
 }
+
+/* ── 拖动 ──
+ * 红条默认压在顶栏上，管理员模式一开就开始菜单就点不着 —— 所以它能拖走。
+ * 光标用 grab/grabbing 明确告诉用户「这东西能拖」，不是靠猜。 */
+.rxam-band {
+  cursor: grab;
+  touch-action: none;           /* 触屏拖动时别让浏览器抢去做滚动 */
+  user-select: none;
+  -webkit-user-select: none;
+}
+.rxam-band.rxam-dragging {
+  cursor: grabbing;
+  /* 拖动时压深一点 + 放大一点，视觉上明确「它被拎起来了」 */
+  filter: brightness(0.92) saturate(1.1);
+  transform-origin: center;
+  transition: none;
+  box-shadow: 0 6px 22px rgba(200, 20, 20, 0.5), 0 0 0 0.5px rgba(255, 255, 255, 0.22) inset;
+}
+/* 拖走之后：left/top 归零，坐标由 --rxam-x/--rxam-y 给的是**中心点**，
+ * 靠额外的 translate(-50%,-50%) 把它挪到那个点上。
+ * 用百分比平移而不是「减去自身宽高」：后者依赖 offsetWidth，
+ * 而字体没加载完时量出来的宽度是错的，刷新后位置会偏。 */
+.rxam-band.rxam-moved {
+  cursor: grab;
+  transform: translate(var(--rxam-x), var(--rxam-y)) translate(-50%, -50%) translateY(var(--rxam-anim));
+}
+/* 「关闭」是按钮：按钮不该跟着拖，否则点它会顺带把红条甩出去 */
+.rxam-band .rxam-off { cursor: pointer; }
+
 .rxam-off {
   flex: none;
   height: 18px;

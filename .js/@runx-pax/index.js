@@ -60,6 +60,12 @@ function validateName(name) {
  */
 function findAppRoots(dir, maxDepth = 4) {
   const found = [];
+  // 解包根目录本身就是应用根（appex.json 直接躺在根上）—— 这是最常见的形状：
+  // 本地装一个应用目录、或开发者打包时把应用内容放在根上。
+  // 漏掉这一条，「包里没有 appex.json」就成了本地安装必踩的坑。
+  try {
+    if (fs.existsSync(path.join(dir, 'appex.json'))) found.push(dir);
+  } catch { /* 忽略 */ }
   const walk = (cur, depth) => {
     if (depth > maxDepth) return;
     let ents;
@@ -372,10 +378,41 @@ module.exports = {
         throw new Error('node 应用端口必须在 1024~65535');
       }
       const dest = path.join(root, appsRel, name);
+      // 源目录就是目标目录的情况（「把这个应用目录装回自己」）：
+      // 流程是 复制到 tmp → 删 dest → 从 tmp 复制回来。数据能回来，
+      // 但中间那一瞬源目录是消失的 —— 万一中途失败，应用就没了。
+      // 这种情况直接拒绝：它没有意义（装到自己身上的都是自己）。
+      const appRootReal = (() => { try { return fs.realpathSync(appRoot); } catch { return appRoot; } })();
+      const destReal = (() => { try { return fs.realpathSync(dest); } catch { return dest; } })();
+      if (appRootReal === destReal) {
+        throw new Error('这个应用已经在它的位置上了，不需要安装');
+      }
+      // 应用的数据目录在更新时必须保住 —— 它不属于代码，属于用户。
+      // 直接 rmSync 整目录会把 data/ 一起抹掉，用户攒的东西就没了。
+      // 做法：先把 data/ 挪到临时位置，装完再放回去。
+      const dataRel = (appex && appex.data_dir) || 'data';
+      const destData = path.join(dest, dataRel);
+      let savedData = null;
+      if (fs.existsSync(destData)) {
+        savedData = path.join(root, 'var', 'runx', '.keep-data-' + name + '-' + Date.now());
+        try {
+          fs.mkdirSync(path.dirname(savedData), { recursive: true });
+          fs.renameSync(destData, savedData);
+        } catch (e) {
+          savedData = null;   // 挪不动就认了：数据没了也不能让安装失败
+        }
+      }
       if (fs.existsSync(dest)) fs.rmSync(dest, { recursive: true, force: true });
       // 只搬应用自己那一层：仓库归档里的 packages/、README 之类不该进应用目录
       fs.cpSync(appRoot, dest, { recursive: true });
       validateDir(dest);
+      // 数据放回去
+      if (savedData) {
+        try {
+          fs.mkdirSync(path.dirname(destData), { recursive: true });
+          fs.renameSync(savedData, destData);
+        } catch { /* 放不回去就算了，不能让安装失败 */ }
+      }
       await runPnpm(name);
       const entry = buildEntry(appex, name);
       upsertApp(entry);
@@ -405,7 +442,6 @@ module.exports = {
         fs.rmSync(tmp, { recursive: true, force: true });
       }
     }
-
     /**
      * 远程安装：下载 tarball → 安全解包 → 装。
      *
