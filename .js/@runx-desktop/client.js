@@ -684,6 +684,239 @@
     return safeMs(Number(g.cell), 96, 48, 240) + safeMs(Number(g.gap), 8, 0, 64);
   }
 
+  /* ═══════════════════════════════════════════════════════════════════
+   * 命令式快捷方式（TUI 应用）
+   *
+   * 桌面上的一个图标可以代表一条命令：双击 → 后端开一个 PTY 会话 →
+   * 窗口里是终端页，直接跑那个程序。关窗口 = 进程结束，反过来进程退出
+   * 也会把窗口关掉（见下面的 postMessage 监听）。
+   * ═══════════════════════════════════════════════════════════════════ */
+
+  /** 图标双击 / 回车 / 「运行」的统一入口：带命令就跑命令，否则开应用 */
+  function openIcon(ic) {
+    if (!ic) return;
+    if (ic.command) return openTui(ic);
+    openApp(ic.app);
+  }
+
+  /**
+   * 跑一条命令：先建会话，再开窗口。
+   *
+   * 顺序不能反 —— 先建会话拿到 sessionId，窗口才能 `?session=` 连上去。
+   * 好处是命令启动失败（终端应用没起来、命令被拒）能在窗口出现之前就报给
+   * 用户，而不是先开一个白窗口再显示错误。
+   */
+  function openTui(ic) {
+    var id = 'tui-' + ic.id;
+    var old = windows[id];
+    // 会话已经结束的窗口没有复用价值：留着它只会让用户再点一次却看到
+    // 一屏「进程已退出」。关掉重建，语义与「重新运行」一致。
+    if (old && !old.exited) { showWindow(id); focusWindow(id); return; }
+    if (old) closeWindow(id, false);
+    var label = ic.label || ic.command;
+    api('/desktop/tui', {
+      method: 'POST',
+      body: JSON.stringify({ command: ic.command, shell: !!ic.shell, label: label }),
+    }).then(function (r) {
+      openTuiWindow(ic, r.sessionId, label);
+    }).catch(function (e) {
+      showToast('「' + label + '」没能启动：' + e.message);
+    });
+  }
+
+  function openTuiWindow(ic, sessionId, label) {
+    var app = appOf('term');
+    if (!app) { showToast('终端应用没有安装，没法运行命令'); return; }
+    var base = appOrigin(app);
+    var src = base + (base.indexOf('?') >= 0 ? '&' : '?') +
+      'session=' + encodeURIComponent(sessionId) +
+      '&ephemeral=1' +
+      '&title=' + encodeURIComponent(label);
+
+    // 终端按字符格排版，窗口太窄会频繁换行、太宽则浪费 —— 给一个「能装下
+    // 100 列」的中等尺寸，手机上直接铺满宽度。
+    var wa = workArea();
+    var w = narrow() ? wa.w : Math.min(920, Math.max(520, Math.round(wa.w * 0.68)));
+    var h = narrow() ? Math.round(wa.h * 0.66) : Math.min(640, Math.max(360, Math.round(wa.h * 0.7)));
+
+    openApp('term', {
+      winId: 'tui-' + ic.id,
+      src: src,
+      title: label,
+      subtitle: 'tui · ' + ic.command,
+      icon: ic.icon || null,
+      transient: true,   // 会话是一次性的，不进桌面存档
+      silent: true,      // 打开不念一遍标题，命令本身已经在标题栏上了
+      geom: {
+        x: Math.round((wa.w - w) / 2),
+        y: Math.round(Math.max(8, (wa.h - h) / 2.6)),
+        w: w, h: h,
+      },
+    });
+  }
+
+  /**
+   * 窗口里的页面请求桌面做点事。目前只有「关掉我自己」。
+   *
+   * 身份不靠消息里自报的名字（那样任何页面都能冒充别的窗口），而是拿
+   * event.source 和已知窗口的 iframe.contentWindow 比对 —— 只有真的挂在
+   * 某个窗口里的页面才匹配得上。这条规则以后加别的能力时同样适用。
+   */
+  window.addEventListener('message', function (e) {
+    var d = e.data;
+    if (!d || d.__runx !== 1 || typeof d.method !== 'string') return;
+    var id = null;
+    for (var k in windows) {
+      var rec = windows[k];
+      if (rec && rec.iframe && rec.iframe.contentWindow === e.source) { id = k; break; }
+    }
+    if (!id) return;
+    var rec2 = windows[id];
+    if (d.method === 'window.close') {
+      var nm = (rec2.title && rec2.title.textContent) || '窗口';
+      closeWindow(id, false);
+      announce(nm + ' 已结束');
+    } else if (d.method === 'window.exited') {
+      // 内容跑完了，窗口留着让用户看最后的输出，但记下「已结束」——
+      // 下次点同一个图标要重开一个新会话，而不是聚焦这个死窗口。
+      rec2.exited = true;
+      if (rec2.subtitle) rec2.subtitle.textContent = 'tui · 已结束';
+    }
+  });
+
+  /* ── 新建 / 编辑命令 ── */
+
+  /** 按命令首词猜一个 emoji：省得每个图标都要手挑 */
+  var EMOJI_HINTS = {
+    htop: '📊', top: '📊', btop: '📊', vim: '📝', nvim: '📝', nano: '📝', emacs: '📝',
+    less: '📄', more: '📄', cat: '📄', man: '📖', tree: '🌳', ncdu: '💾', du: '💾',
+    df: '💾', lsblk: '💾', mount: '💾', fdisk: '💾',
+    ssh: '🔗', scp: '🔗', rsync: '🔗', git: '🌿', docker: '🐳', podman: '🐳',
+    ping: '📡', nmap: '🛰️', curl: '🌐', wget: '🌐', netstat: '📡', ss: '📡',
+    journalctl: '📜', dmesg: '📜', tail: '📜', make: '🔨', cargo: '🦀',
+    python: '🐍', python3: '🐍', node: '🟩', npm: '📦', pnpm: '📦',
+    tmux: '🪟', screen: '🪟', bash: '⌨️', zsh: '⌨️', mysql: '🐬', psql: '🐘',
+    redis: '🧱', sqlite3: '🧱', ffmpeg: '🎬', bc: '🧮', watch: '👀', fzf: '🔍',
+  };
+  function guessEmoji(cmd) {
+    var first = String(cmd || '').trim().split(/\s+/)[0] || '';
+    return EMOJI_HINTS[first] || EMOJI_HINTS[first.replace(/.*\//, '')] || '🖥️';
+  }
+
+  function fieldRow(labelText, node, hintText) {
+    var wrap = el('div');
+    wrap.style.cssText = 'display:grid;gap:6px';
+    wrap.appendChild(el('div', 'caption', labelText));
+    wrap.appendChild(node);
+    if (hintText) {
+      var h = el('div');
+      h.style.cssText = 'font-size:11px;line-height:1.55;color:var(--label-tertiary)';
+      h.textContent = hintText;
+      wrap.appendChild(h);
+    }
+    return wrap;
+  }
+
+  function mkField(value, placeholder, mono) {
+    var i = el('input');
+    i.type = 'text';
+    i.value = value == null ? '' : String(value);
+    i.placeholder = placeholder || '';
+    i.autocomplete = 'off';
+    i.spellcheck = false;
+    i.style.cssText = 'width:100%;box-sizing:border-box;padding:8px 10px;border-radius:8px;' +
+      'border:0.5px solid var(--hairline-strong);background:var(--surface-card);' +
+      'color:var(--label-primary);outline:none';
+    if (mono) { i.style.fontFamily = 'ui-monospace, Menlo, Consolas, monospace'; i.style.fontSize = '13px'; }
+    return i;
+  }
+
+  /**
+   * 新建 / 编辑一条命令式快捷方式。
+   *
+   * 命令存在**服务端**（desktop.json），不是 URL 也不是前端内存 —— 一个
+   * 快捷方式等于一条能被执行的本机命令，它必须和「谁能改桌面配置」同权，
+   * 而不是和「谁能点一个链接」同权。
+   */
+  function promptNewCommand(editing) {
+    var cur = (editing && editing.command) ? editing : null;
+    var done = null;
+
+    var body = el('div');
+    body.style.cssText = 'display:grid;gap:12px';
+
+    var nameIn = mkField(cur ? cur.label : '', '例如：内存');
+    var cmdIn = mkField(cur ? cur.command : '', '例如：free -h', true);
+    var iconIn = mkField(cur ? (cur.icon || '') : '', guessEmoji(cur ? cur.command : ''));
+
+    var shellWrap = el('label');
+    shellWrap.style.cssText = 'display:flex;align-items:flex-start;gap:8px;cursor:pointer';
+    var shellIn = el('input');
+    shellIn.type = 'checkbox';
+    shellIn.checked = !!(cur && cur.shell);
+    shellIn.style.cssText = 'margin-top:2px;flex:none';
+    var shellText = el('div');
+    shellText.style.cssText = 'font-size:12px;line-height:1.5;color:var(--label-secondary)';
+    shellText.innerHTML = '在 shell 中运行<span style="color:var(--label-tertiary)">' +
+      '　支持 | &gt; &amp;&amp; 管道与重定向。不勾时命令按空格拆成参数直接执行，' +
+      '特殊字符不会被解释。</span>';
+    shellWrap.appendChild(shellIn);
+    shellWrap.appendChild(shellText);
+
+    body.appendChild(fieldRow('名称', nameIn, '显示在图标下面；留空则用命令本身'));
+    body.appendChild(fieldRow('命令', cmdIn, '在本机 shell 的工作目录下执行，关窗口即结束进程'));
+    body.appendChild(fieldRow('图标', iconIn, '一个 emoji'));
+    body.appendChild(shellWrap);
+
+    var btns = el('div');
+    btns.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;margin-top:2px';
+    var cancel = el('button', 'rx-btn', '取消');
+    var ok = el('button', 'rx-btn primary', cur ? '保存' : '放到桌面');
+    btns.appendChild(cancel); btns.appendChild(ok);
+    body.appendChild(btns);
+
+    function save() {
+      var cmd = cmdIn.value.trim();
+      if (!cmd) { cmdIn.focus(); showToast('先写一条命令'); return; }
+      var payload = {
+        label: nameIn.value.trim() || cmd.split(/\s+/)[0],
+        command: cmd,
+        shell: shellIn.checked,
+        icon: iconIn.value.trim() || guessEmoji(cmd),
+      };
+      var req = cur
+        ? api('/desktop/icons/' + encodeURIComponent(cur.id),
+            { method: 'PATCH', body: JSON.stringify(payload) })
+        : api('/desktop/icons', { method: 'POST', body: JSON.stringify(payload) });
+      ok.disabled = true;
+      req.then(function () {
+        if (done) done();
+        return reloadDesktop();
+      }).then(function () {
+        showToast(cur ? '已更新「' + payload.label + '」' : '已放到桌面：' + payload.label);
+      }).catch(function (e) {
+        ok.disabled = false;
+        showToast('没能保存：' + e.message);
+      });
+    }
+
+    cmdIn.addEventListener('input', function () {
+      if (!iconIn.value.trim() || iconIn.value === guessEmoji(cur ? cur.command : '')) {
+        iconIn.value = guessEmoji(cmdIn.value);
+      }
+    });
+    [nameIn, cmdIn, iconIn].forEach(function (inp) {
+      inp.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); save(); }
+      });
+    });
+    cancel.addEventListener('click', function () { if (done) done(); });
+    ok.addEventListener('click', save);
+
+    done = sheet(cur ? '编辑命令' : '新建终端命令', body, []);
+    setTimeout(function () { (cur ? cmdIn : cmdIn).focus(); }, 30);
+  }
+
   function renderIcons() {
     var old = surface.querySelectorAll('.rx-icon');
     for (var i = 0; i < old.length; i++) old[i].remove();
@@ -708,9 +941,14 @@
       node.style.left = px(ic.x * step);
       node.style.top = px(ic.y * step);
       node.dataset.iconId = ic.id;
+      if (ic.command) node.dataset.command = ic.command;
 
       var url = appIconUrl(app);
-      if (url) {
+      if (ic.icon) {
+        // 命令式快捷方式：图标就是用户写的一个 emoji。走 .rx-emoji 容器，
+        // 与「没有图标文件的应用」同一套毛玻璃底，桌面上看不出两套材质。
+        node.appendChild(el('span', 'rx-emoji', ic.icon));
+      } else if (url) {
         var img = el('img');
         img.src = url;
         img.alt = '';
@@ -726,7 +964,9 @@
       }
       node.appendChild(el('span', 'rx-label', ic.label || appTitle(app)));
 
-      if (app && isRunning(app)) {
+      // 命令图标的绿点表示「应用在跑」，而 term 永远在跑 —— 对一条命令来说
+      // 这个点恒亮，没有信息量，反而让人以为「已经在运行了」。
+      if (!ic.command && app && isRunning(app)) {
         node.appendChild(el('span', 'rx-badge'));
       }
 
@@ -737,10 +977,10 @@
       });
       node.addEventListener('dblclick', function (e) {
         e.stopPropagation();
-        openApp(ic.app);
+        openIcon(ic);
       });
       node.addEventListener('keydown', function (e) {
-        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openApp(ic.app); }
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openIcon(ic); }
       });
       // 右键上下文菜单（§3.5）
       node.addEventListener('contextmenu', function (e) {
@@ -974,6 +1214,7 @@
       // 内核扩展开的面板窗口不进快照：它们没有对应的应用记录，恢复时也
       // 无从重建（由扩展自己在需要时打开），存进去只会在启动时留下一堆幽灵条目。
       if (!rec.app) return null;
+      if (rec.transient) return null;
       var g = rec.geom || currentGeom(rec);
       // 最大化/全屏时 offsetWidth 是铺满后的尺寸，要记住的是「还原后」的几何 ——
       // rec.restored 正是为此存的。
@@ -1231,7 +1472,9 @@
     opts = opts || {};
     var app = appOf(name);
     if (!app) { showToast('找不到应用「' + name + '」'); return null; }
-    var id = winId(name);
+    // opts.winId / opts.src 让「同一个应用、不同内容」的窗口成为可能：
+    // 桌面上的 htop 图标和终端图标都跑 term，但连的是不同会话，窗口也要分开记。
+    var id = opts.winId || winId(name);
 
     var rec = windows[id];
     if (rec) {
@@ -1252,7 +1495,7 @@
     w.style.height = px(g.h);
     w.dataset.winId = id;
     w.setAttribute('role', 'dialog');
-    w.setAttribute('aria-label', appTitle(app));
+    w.setAttribute('aria-label', opts.title || appTitle(app));
 
     /* — 工具栏（§3.1：承载窗口控件、标题和工具栏项）— */
     var toolbar = el('div', 'rx-win-toolbar');
@@ -1270,9 +1513,9 @@
     dots.appendChild(bClose); dots.appendChild(bMin); dots.appendChild(bMax);
 
     var titleZone = el('div', 'rx-win-title-zone');
-    var title = el('div', 'rx-win-title', appTitle(app));
-    var subtitle = el('div', 'rx-win-subtitle',
-      app.type === 'node' ? ('node · :' + app.port) : 'web');
+    var title = el('div', 'rx-win-title', opts.title || appTitle(app));
+    var subtitle = el('div', 'rx-win-subtitle', opts.subtitle ||
+      (app.type === 'node' ? ('node · :' + app.port) : 'web'));
     titleZone.appendChild(title);
     titleZone.appendChild(subtitle);
 
@@ -1377,7 +1620,10 @@
     }
 
     // 应用若是 node 且没在跑，先让 supervisor 拉起来再连（避免必然的第一次失败）
-    if (app.type === 'node' && !isRunning(app)) {
+    if (opts.src) {
+      // 调用方自带地址：应用显然已经在跑（会话是它给的），不必再探活
+      iframe.src = opts.src;
+    } else if (app.type === 'node' && !isRunning(app)) {
       veilHint.textContent = '正在启动应用…';
       api('/apps/' + encodeURIComponent(name) + '/start', { method: 'POST' })
         .then(function () { return refreshApps(); })
@@ -1399,6 +1645,10 @@
       toolbarStyle: initialStyle,
       veil: veil, veilHint: veilHint, tools: tools,
       openTs: Date.now(),
+      // 一次性窗口：内容是「这一次的会话」，刷新/重登后不可能复原，
+      // 所以不进桌面存档（否则启动时冒出一堆连不上会话的死窗口）。
+      transient: !!opts.transient,
+      icon: opts.icon || null,    // 命令式窗口的 emoji，Dock 用它区分同名应用
     };
     windows[id] = recNew;
     order.push(id);
@@ -1957,9 +2207,21 @@
       var active = id === activeId && !rec.minimized && !rec.hidden;
       var b = el('button', 'rx-dock-item' + (active ? ' active' : '') +
         (rec.minimized || rec.hidden ? ' minimized' : ''));
-      b.setAttribute('title', appTitle(rec.app) +
+      // 标题优先用窗口自己的：同一个 term 上挂着「内存」「磁盘」两个命令时，
+      // 全叫「终端」就分不清了。
+      var dockLabel = (rec.title && rec.title.textContent) || appTitle(rec.app);
+      b.setAttribute('title', dockLabel +
         (rec.minimized ? '（已最小化）' : rec.hidden ? '（已隐藏）' : ''));
 
+      if (rec.icon) {
+        b.appendChild(el('span', 'rx-dock-emoji', rec.icon));
+        b.setAttribute('aria-label', dockLabel);
+        b.addEventListener('click', function () {
+          if (rec.minimized || rec.hidden) showWindow(id); else focusWindow(id);
+        });
+        dock.appendChild(b);
+        return;
+      }
       var url = appIconUrl(rec.app);
       if (url) {
         var img = el('img', 'rx-dock-ico');
@@ -2301,6 +2563,7 @@
   function desktopMenuItems() {
     var items = [
       { label: '新建终端窗口', glyph: 'terminal', act: function () { openApp('term'); } },
+      { label: '新建终端命令…', glyph: 'terminal', act: function () { promptNewCommand(); } },
       { label: '打开应用…', glyph: 'external', key: '⌘O', act: openLauncher },
       { label: '开始菜单', glyph: 'runx', key: '⌘␣', act: openStartMenu },
       { sep: true },
@@ -2334,7 +2597,7 @@
   }
   function iconMenuItems(ic, app) {
     return [
-      { label: '打开', act: function () { openApp(ic.app); } },
+      { label: ic.command ? '运行' : '打开', act: function () { openIcon(ic); } },
       { label: '在浏览器新标签打开', disabled: !app, act: function () {
           if (app) window.open(appOrigin(app), '_blank', 'noopener');
         } },
@@ -2346,6 +2609,10 @@
             method: 'PATCH', body: JSON.stringify({ label: name.trim() || null }),
           }).then(reloadDesktop).catch(function (e) { showToast('改名失败：' + e.message); });
         } },
+      ...(ic.command ? [
+        { sep: true },
+        { label: '编辑命令…', act: function () { promptNewCommand(ic); } },
+      ] : []),
       { label: '移到下一空格', act: function () { moveIconToFreeCell(ic); } },
       { sep: true },
       { label: '从桌面移除', destructive: true, act: function () {

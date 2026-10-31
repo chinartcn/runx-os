@@ -713,6 +713,13 @@
   display: grid; place-items: center;
   font-size: 15px; line-height: 1;
 }
+/* 命令式窗口在 Dock 里用 emoji 图标 + 窗口名，和同名应用区分开 */
+#runx-desktop .rx-dock-item .rx-dock-emoji {
+  width: 22px; height: 22px;
+  flex: none;
+  display: grid; place-items: center;
+  font-size: 17px; line-height: 1;
+}
 #runx-desktop .rx-dock-item .rx-dock-name {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-weight: 550;

@@ -30,6 +30,16 @@
     sessions: 'runx.term.sessions',
   };
 
+  // 由桌面壳打开时带参数：session=直接连已有会话，ephemeral=进程结束就关窗口，
+  // title=标签名（图标上写的名字比 "bash 80x24" 有意义得多）
+  var params = (function () {
+    var q = {};
+    try {
+      new URLSearchParams(location.search).forEach(function (v, k) { q[k] = v; });
+    } catch (e) { /* 老浏览器：退化成普通终端 */ }
+    return q;
+  })();
+
   var state = {
     ws: null,
     connected: false,
@@ -242,6 +252,14 @@
     switch (msg.type) {
       case 'welcome':
         if (!msg.pty) { hint('当前环境不支持 PTY'); setStatus('bad', 'PTY 不可用'); }
+        // 桌面壳点名要哪个会话：只连它。历史标签是「自己开的终端」的记忆，
+        // 在这里恢复会把别人的会话一起拉进来。
+        if (params.session) {
+          wsSend({ type: 'attach', sessionId: params.session });
+          state.resumeIds = [];
+          flushPending();
+          break;
+        }
         // 恢复已存在的会话
         if (state.resumeIds.length) {
           state.resumeIds.forEach(function (id) { wsSend({ type: 'attach', sessionId: id }); });
@@ -253,16 +271,16 @@
         break;
       case 'created':
         var rec = makeTerminal(msg.sessionId, msg.cols, msg.rows);
-        setLabel(msg.sessionId, 'shell ' + msg.cols + 'x' + msg.rows);
+        setLabel(msg.sessionId, params.title || msg.title || ('shell ' + msg.cols + 'x' + msg.rows));
         activate(msg.sessionId);
-        persistSessions();
+        if (!params.ephemeral) persistSessions();
         break;
       case 'session': // attach 成功 / 恢复
         var r = makeTerminal(msg.sessionId, msg.cols, msg.rows);
-        setLabel(msg.sessionId, msg.title || 'shell');
+        setLabel(msg.sessionId, params.title || msg.title || 'shell');
         if (r.exited) { r.exited = false; }
         activate(msg.sessionId);
-        persistSessions();
+        if (!params.ephemeral) persistSessions();
         break;
       case 'output':
         var t = state.sessions[msg.sessionId];
@@ -276,12 +294,21 @@
           s.term.write('\r\n\x1b[2m[进程已退出 ' + codeStr + ']  按 Enter 重开\x1b[0m\r\n');
           s._lastExit = true;
         }
+        // 一次性命令（桌面上的 TUI 图标）：进程结束了，但**不关窗口** ——
+        // 用户点 `free -h` 就是为了看那几行输出，窗口跟着进程一起消失等于
+        // 什么都没看到。只告诉桌面「这个窗口的内容已经跑完」，由它决定
+        // 是标个已退出还是下次重开。
+        if (params.ephemeral) setTimeout(notifyExited, 120);
         break;
       case 'closed':
         if (state.sessions[msg.sessionId]) closeSession(msg.sessionId);
         break;
       case 'resized':
-        if (state.sessions[msg.sessionId]) setLabel(msg.sessionId, 'shell ' + msg.cols + 'x' + msg.rows);
+        // 窗口一打开就会 fit + resize，如果这里照旧写「shell 101x25」，
+        // 桌面壳传进来的命令名会被立刻冲掉 —— 标签始终显示成设备名。
+        if (state.sessions[msg.sessionId]) {
+          setLabel(msg.sessionId, params.title || ('shell ' + msg.cols + 'x' + msg.rows));
+        }
         // 正常 resize 不发 note（真终端调整尺寸本来无声）；只有后端回落到
         // 「重建会话」时才会带 note，用浮层提示而不是写进终端内容里。
         if (msg.note) hint(msg.note);
@@ -300,6 +327,45 @@
         break;
     }
   }
+
+  /**
+   * 告诉桌面壳「这个窗口里的会话已经结束」。
+   *
+   * 桌面据此把窗口标成已退出，并在下次点同一个图标时重开 —— 而不是复用
+   * 一个只会显示「进程已退出」的死窗口。
+   *
+   * 终端页可以独立打开（直接访问 :3460），那时没有父窗口，这条消息自然
+   * 落空，页面照常显示输出。不带 targetOrigin 是因为父级 origin 未知；
+   * 消息里只有 sessionId，没有敏感内容。
+   */
+  function notifyExited() {
+    try {
+      if (window.parent && window.parent !== window) {
+        window.parent.postMessage({ __runx: 1, method: 'window.exited', sessionId: params.session || null }, '*');
+      }
+    } catch (e) { /* 跨源被拒：什么也不做 */ }
+  }
+
+  /**
+   * 读出某个会话的纯文本快照（只读）。
+   *
+   * xterm 默认用 canvas 渲染，DOM 里没有文字 —— 这段既方便用户排障
+   * （控制台里 `__runxTermText()` 就能拷出屏幕内容），也让自动化测试不必
+   * 依赖渲染器实现。
+   */
+  window.__runxTermText = function (id) {
+    var rec = state.sessions[id || state.active];
+    if (!rec) return '';
+    try {
+      var buf = rec.term.buffer.active;
+      var out = [];
+      for (var i = 0; i < buf.length; i++) {
+        var line = buf.getLine(i);
+        out.push(line ? line.translateToString(true) : '');
+      }
+      return out.join('\n').replace(/\n+$/, '');
+    } catch (e) { return ''; }
+  };
 
   function flushPending() {
     while (state.pendingInput.length) {

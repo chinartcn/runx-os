@@ -41,7 +41,9 @@ const ASSET_MIME = {
 
 let S = null;
 
-const ICON_FIELDS = ['x', 'y', 'label'];
+// command / shell / icon 让一个图标可以代表「一条命令」（TUI 应用）而不仅是
+// 「一个已安装应用」：app 仍然指向 term（谁提供 PTY），command 说明在里面跑什么。
+const ICON_FIELDS = ['x', 'y', 'label', 'command', 'shell', 'icon'];
 const WIDGET_FIELDS = ['x', 'y', 'w', 'h', 'config'];
 const TASKBAR_POSITIONS = ['top', 'bottom', 'left', 'right'];
 const THEMES = ['light', 'dark', 'auto'];
@@ -198,19 +200,120 @@ module.exports = {
 
     function addIcon(body) {
       const d = load();
-      if (!body || !body.app) throw new Error('缺少 app');
-      const cell = body.x != null && body.y != null ? { x: body.x, y: body.y } : nextFreeCell(d);
-      const icon = { id: newId(), app: body.app, x: cell.x, y: cell.y, label: body.label || null };
+      const b = body || {};
+      // 命令式快捷方式默认挂在 term 上：PTY 由它提供，桌面上只需要记「跑什么」。
+      if (!b.app && b.command) b.app = 'term';
+      if (!b.app) throw new Error('缺少 app');
+      const cell = b.x != null && b.y != null ? { x: b.x, y: b.y } : nextFreeCell(d);
+      const icon = { id: newId(), app: b.app, x: cell.x, y: cell.y, label: b.label || null };
+      applyIconExtras(icon, b);
       d.icons = d.icons || [];
       d.icons.push(icon);
       save(d);
       return icon;
     }
+
+    /**
+     * 写入 command / shell / icon 三个可选字段。
+     *
+     * command 是**用户自己**在桌面右键里写的命令，所以这里不做白名单 —— 本机
+     * 用户本来就能开终端敲同样的东西。真正要守的边界在别处：
+     *   · 只有本机 UI 能创建（不开放远程接口，URL 里也不接受命令）
+     *   · 执行时不拼 shell（除非显式勾选 shell 语法）
+     *   · 长度封顶，避免把 icon 变成配置文件炸弹
+     */
+    function applyIconExtras(icon, b) {
+      if (b.command !== undefined) {
+        const c = b.command == null ? '' : String(b.command).trim();
+        if (c.length > 512) throw Object.assign(new Error('命令太长（上限 512 字）'), { code: 422 });
+        icon.command = c || null;
+      }
+      if (b.shell !== undefined) icon.shell = !!b.shell;
+      if (b.icon !== undefined) {
+        // emoji 图标：最多 4 个码点（"👨‍👩‍👧" 这类组合 emoji 也放得下）
+        const e = b.icon == null ? '' : String(b.icon).trim();
+        if ([...e].length > 8) throw Object.assign(new Error('图标只能是一个 emoji'), { code: 422 });
+        icon.icon = e || null;
+      }
+      if (icon.command && icon.shell === undefined) icon.shell = false;
+    }
+
+    /* ── 命令式快捷方式的启动 ── */
+
+    /** term 应用监听的端口：优先 env，其次问 supervisor 要，最后回退默认值 */
+    async function termPort() {
+      if (process.env.RUNX_TERM_PORT) return Number(process.env.RUNX_TERM_PORT);
+      const gw = Number(process.env.PORT) || 3000;
+      try {
+        const r = await fetch('http://127.0.0.1:' + gw + '/runx/apps',
+          { signal: AbortSignal.timeout(3000) });
+        const j = await r.json();
+        const t = (j.apps || []).find((a) => a.name === 'term');
+        if (t && t.port) return t.port;
+      } catch (e) { /* supervisor 没响应：走默认端口 */ }
+      return 3460;
+    }
+
+    /**
+     * 把命令行拆成 argv。
+     *
+     * 只处理成对的引号，不做变量展开、通配符、重定向 —— 那些是 shell 的活。
+     * 用户真要它们时勾上「在 shell 中运行」，那时整串原样交给 sh -c。
+     */
+    function splitArgv(str) {
+      const out = [];
+      const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
+      let m;
+      while ((m = re.exec(str)) !== null) {
+        out.push(m[1] != null ? m[1] : (m[2] != null ? m[2] : m[3]));
+      }
+      return out.length ? out : [str];
+    }
+
+    /**
+     * 为一条命令开一个新会话，返回 sessionId；桌面前端随后把窗口指向
+     * `<term>/?session=<id>&ephemeral=1`。
+     *
+     * 由后端代理（而不是前端直接往 :3460 发请求）是这条链路的关键：
+     * 前端与 term 不同源，跨源 POST 会被 term 的 sameOrigin 拒掉；后端 fetch
+     * 不带 Origin，天然放行。于是「谁能创建任意命令」= 本机进程，网页不行。
+     */
+    async function startTui(body) {
+      const cmd = String((body && body.command) || '').trim();
+      if (!cmd) throw Object.assign(new Error('命令不能为空'), { code: 422 });
+      if (cmd.length > 512) throw Object.assign(new Error('命令太长（上限 512 字）'), { code: 422 });
+
+      const port = await termPort();
+      const payload = {
+        command: body.shell ? cmd : splitArgv(cmd),
+        shell: !!body.shell,
+        cwd: body.cwd || null,
+        label: String(body.label || cmd).slice(0, 80),
+        cols: body.cols || 100,
+        rows: body.rows || 28,
+        ephemeral: true,
+      };
+      let r, j;
+      try {
+        r = await fetch('http://127.0.0.1:' + port + '/sessions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          signal: AbortSignal.timeout(15000),
+        });
+        j = await r.json();
+      } catch (e) {
+        throw Object.assign(new Error('终端应用没有响应（' + port + '）'), { code: 502 });
+      }
+      if (!r.ok) throw Object.assign(new Error(j.message || j.error || '启动失败'), { code: 502 });
+      return j;
+    }
     function patchIcon(id, body) {
       const d = load();
       const icon = findIcon(d, id);
       if (!icon) throw Object.assign(new Error('图标不存在'), { code: 404 });
-      for (const k of ICON_FIELDS) if (body[k] != null) icon[k] = body[k];
+      for (const k of ['x', 'y', 'label']) if (body[k] != null) icon[k] = body[k];
+      applyIconExtras(icon, body);
       save(d);
       return icon;
     }
@@ -460,7 +563,7 @@ module.exports = {
     }
 
     S = {
-      json, err, load, save, addIcon, patchIcon, delIcon,
+      json, err, load, save, addIcon, patchIcon, delIcon, startTui,
       addWidget, patchWidget, delWidget, setWallpaper, setTheme, setTaskbar, setGrid, meta,
       setWindows, delWindow,
       // 本轮新增：外观与显示
@@ -549,6 +652,12 @@ module.exports = {
     if (req.method === 'DELETE' && p.startsWith(API + '/desktop/icons/')) {
       const id = decodeURIComponent(p.slice((API + '/desktop/icons/').length));
       try { return S.json(200, S.delIcon(id)); } catch (e) { return S.err(404, e.message); }
+    }
+
+    if (req.method === 'POST' && p === API + '/desktop/tui') {
+      return Promise.resolve(ctx.readJson().catch(() => ({}))).then((b) =>
+        S.startTui(b).then((r) => S.json(200, r))
+          .catch((e) => S.err(e.code === 422 ? 422 : 502, e.message)));
     }
 
     if (req.method === 'POST' && p === API + '/desktop/widgets') {

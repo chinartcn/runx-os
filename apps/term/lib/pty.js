@@ -100,14 +100,76 @@ function probeScript() {
  * 注意 `tty` 读的是 fd 0（PTY slave），但输出被重定向到文件，所以不会
  * 在终端里留下任何字符。
  */
-function scriptArgs(cols, rows, ttyFile) {
+function scriptArgs(cols, rows, ttyFile, spec) {
   const sup = probeScript();
   const flags = sup.ret ? '-qfec' : '-qfc';
-  const parts = [SHELL].concat(SHELL_ARGS ? SHELL_ARGS.split(/\s+/).filter(Boolean) : []).concat(['-i']);
   let inner = 'stty rows ' + rows + ' cols ' + cols + ' 2>/dev/null;';
   if (ttyFile) inner += " tty > " + shq(ttyFile) + ' 2>/dev/null;';
-  inner += ' exec ' + parts.join(' ');
+  inner += ' exec ' + (spec ? cmdText(spec) : shellText());
   return [flags, inner, '/dev/null'];
+}
+
+/** 默认会话：交互式登录 shell */
+function shellText() {
+  const args = SHELL_ARGS ? SHELL_ARGS.split(/\s+/).filter(Boolean) : [];
+  return [SHELL].concat(args).concat(['-i']).join(' ');
+}
+
+/**
+ * 把 spec 变成一条 `exec` 得动的命令行。
+ *
+ * 两条路必须分开，不能混：
+ *   · shell=false —— 每个 argv 单独引号包裹。命令是**数据**，`;`、`|`、`$(...)`
+ *     在参数里就只是普通字符，不可能借它拼出第二条命令。
+ *   · shell=true  —— 整串交给 `sh -c`。用户显式要管道 / `&&` / 重定向时才有意义，
+ *     此时命令就是代码，安全性只能靠「谁能创建这个快捷方式」来保证（只有本机 UI）。
+ *
+ * ⚠ 不能在 argv 模式下直接 `exec ls | grep`：`exec` 只作用于第一个命令，
+ *   管道会额外 fork 一层，`exec` 的「替换当前进程」语义就丢了 —— 关闭窗口
+ *   时杀的还是中间那层 shell，真正的程序会变孤儿。所以 shell 模式一律再套
+ *   `sh -c`，让 exec 作用在 sh 上，sh 自己接管管道。
+ */
+function cmdText(spec) {
+  if (spec.shell) return 'sh -c ' + shq(spec.argv.join(' '));
+  return spec.argv.map(shq).join(' ');
+}
+
+/** 会话名：优先用用户起的名字，否则取命令首词的文件名 */
+function cmdName(spec) {
+  if (spec.label) return spec.label;
+  const first = spec.shell ? spec.argv.join(' ') : spec.argv[0];
+  const word = String(first || '').trim().split(/\s+/)[0] || SHELL;
+  return path.basename(word);
+}
+
+/**
+ * 校验并规整一个会话描述。
+ *
+ * 只做形状检查（是谁、跑什么、在哪跑），不判断命令是否存在 —— 不存在的命令
+ * 会由 shell 自己报「command not found」，那条错误信息对用户更有用。
+ *
+ * @returns {null|{argv:string[],shell:boolean,cwd:string|null,label:string|null,ephemeral:boolean}}
+ */
+function normalizeSpec(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  let argv = raw.argv != null ? raw.argv : raw.command;
+  if (typeof argv === 'string') argv = [argv];
+  if (!Array.isArray(argv)) return null;
+  argv = argv.map((v) => String(v)).filter((v) => v.length > 0);
+  if (!argv.length) return null;
+
+  let cwd = null;
+  if (raw.cwd) {
+    const c = path.resolve(String(raw.cwd));
+    try { if (fs.statSync(c).isDirectory()) cwd = c; } catch (e) { /* 不存在就回退默认目录 */ }
+  }
+  return {
+    argv,
+    shell: !!raw.shell,
+    cwd,
+    label: raw.label ? String(raw.label).slice(0, 80) : null,
+    ephemeral: !!raw.ephemeral,
+  };
 }
 
 /** 单引号包裹路径，防止临时目录里的空格 / 特殊字符破坏内层命令 */
@@ -168,13 +230,16 @@ function sttySetSize(tty, cols, rows, cb) {
 }
 
 class Session {
-  constructor(id, cols, rows) {
+  constructor(id, cols, rows, spec) {
     this.id = id;
     this.cols = cols;
     this.rows = rows;
     this.createdAt = Date.now();
     this.lastActive = Date.now();
-    this.title = SHELL + ' ' + cols + 'x' + rows;
+    // spec 为空 = 交互式 shell；有 spec = 跑指定命令（TUI 应用）
+    this.spec = spec || null;
+    this.name = spec ? cmdName(spec) : SHELL;
+    this.title = this.name + ' ' + cols + 'x' + rows;
     this.proc = null;
     this.seq = 0;
     this.onOutput = null;   // (session, buf) => void
@@ -193,8 +258,9 @@ class Session {
     const sup = probeScript();
     if (!sup) throw new Error('script_unavailable');
     this.ttyPath = null;
-    const args = scriptArgs(this.cols, this.rows, this.ttyFile);
-    const cwd = process.env.TERM_ROOT_CWD || process.env.HOME || os.homedir() || process.cwd();
+    const args = scriptArgs(this.cols, this.rows, this.ttyFile, this.spec);
+    const cwd = (this.spec && this.spec.cwd) ||
+      process.env.TERM_ROOT_CWD || process.env.HOME || os.homedir() || process.cwd();
     const child = cp.spawn('script', args, {
       cwd,
       detached: true,
@@ -304,7 +370,7 @@ class Session {
         if (ok) {
           this.cols = clampCols(p.cols);
           this.rows = clampRows(p.rows);
-          this.title = SHELL + ' ' + this.cols + 'x' + this.rows;
+          this.title = this.name + ' ' + this.cols + 'x' + this.rows;
         }
         settle(ok);
         this._drainSize(); // 处理 stty 期间堆积的最新一档
@@ -406,16 +472,17 @@ class SessionManager {
   list() {
     return Array.from(this.sessions.values()).map((s) => ({
       id: s.id, title: s.title, cols: s.cols, rows: s.rows, pid: s.pid || null,
+      command: s.spec ? s.spec.argv.join(' ') : null, shell: s.spec ? s.spec.shell : null,
       createdAt: s.createdAt, lastActive: s.lastActive, conns: s.conns ? s.conns.size : 0,
     }));
   }
 
-  create(cols, rows, id) {
+  create(cols, rows, id, spec) {
     if (this.sessions.size >= MAX_SESSIONS) {
       const err = new Error('max_sessions'); err.code = 'max_sessions'; throw err;
     }
     const sid = id || newId();
-    const s = new Session(sid, clampCols(cols), clampRows(rows));
+    const s = new Session(sid, clampCols(cols), clampRows(rows), normalizeSpec(spec));
     this.sessions.set(sid, s);
     return s;
   }
@@ -432,7 +499,7 @@ class SessionManager {
     if (!s) return null;
     s.cols = clampCols(cols);
     s.rows = clampRows(rows);
-    s.title = SHELL + ' ' + s.cols + 'x' + s.rows;
+    s.title = s.name + ' ' + s.cols + 'x' + s.rows;
     return new Promise((resolve) => {
       s.kill(() => {
         s.start();
@@ -470,4 +537,4 @@ class SessionManager {
 function clampCols(c) { const n = parseInt(c, 10); return !n || n < 2 ? DEFAULT_COLS : Math.min(n, 1000); }
 function clampRows(r) { const n = parseInt(r, 10); return !n || n < 1 ? DEFAULT_ROWS : Math.min(n, 1000); }
 
-module.exports = { SessionManager, probeScript, probeSttyFileMode, sttySetSize, SHELL, MAX_SESSIONS, GRACE_MS, safeMs };
+module.exports = { SessionManager, normalizeSpec, probeScript, probeSttyFileMode, sttySetSize, SHELL, MAX_SESSIONS, GRACE_MS, safeMs };

@@ -16,7 +16,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const ws = require('./lib/ws');
-const { SessionManager, probeScript, probeSttyFileMode, MAX_SESSIONS, GRACE_MS } = require('./lib/pty');
+const { SessionManager, normalizeSpec, probeScript, probeSttyFileMode, MAX_SESSIONS, GRACE_MS } = require('./lib/pty');
 
 const PORT = Number(process.env.PORT) || 3460;
 const HOST = process.env.TERM_HOST || '0.0.0.0';
@@ -46,6 +46,10 @@ function unbind(conn) {
   if (set) { set.delete(conn); if (set.size === 0) connsBySession.delete(sid); }
   // conn 全断 → 宽限后回收该会话（避免仅刷新页面就丢 shell）
   if (!connsBySession.has(sid)) {
+    const sess = sessions.get(sid);
+    // 一次性命令（TUI 图标）：窗口就是进程的外壳，关了窗口进程就该结束。
+    // 宽限期的存在理由是「刷新页面别丢 shell」，对一条 `htop` 不成立。
+    if (sess && sess.spec && sess.spec.ephemeral) { sessions.close(sid); return; }
     const t = setTimeout(() => {
       pendingToReap.delete(sid);
       if (!connsBySession.has(sid) && sessions.get(sid)) {
@@ -71,6 +75,20 @@ function wireSession(s) {
   };
   s.onExit = (sess, code, signal) => {
     broadcast(sess.id, { type: 'exit', sessionId: sess.id, code, signal });
+    // 一次性命令（TUI 图标）进程结束就没有意义了：给前端 2 秒发「关窗」，之后
+    // 无论如何回收 —— 否则用户关掉窗口、页面卡住或没监听时，会话会挂到 30 分钟
+    // 空闲回收，白占一个名额和一份 PTY。
+    if (sess.spec && sess.spec.ephemeral) {
+      const t = setTimeout(() => {
+        const cur = sessions.get(sess.id);
+        // 还有人连着 → 窗口还开着，用户正在看最后的输出，别删。
+        // 没人连着说明窗口已经关了（unbind 那条路会更快地回收）。
+        if (cur === sess && !cur.proc && (!cur.conns || cur.conns.size === 0)) {
+          sessions.close(sess.id);
+        }
+      }, 5000);
+      t.unref();
+    }
   };
   return s;
 }
@@ -110,27 +128,47 @@ function doHello(conn, msg) {
   if (Array.isArray(msg.resume)) {
     for (const id of msg.resume) {
       const s = sessions.get(id);
-      if (s) conn.send({ type: 'session', sessionId: s.id, title: s.title, cols: s.cols, rows: s.rows, alive: true });
+      if (s) conn.send({ type: 'session', sessionId: s.id, title: s.title, cols: s.cols, rows: s.rows, alive: true, command: s.spec ? s.spec.argv.join(' ') : null });
     }
   }
+}
+
+/**
+ * 从消息里取会话描述。没有 argv/command 就是普通 shell 会话（返回 null）。
+ *
+ * 默认**不** ephemeral：用户手动点「+」开的终端要保留，刷新页面还得在。
+ * 只有 TUI 图标那条路（桌面上双击一个命令）才显式传 ephemeral=true。
+ */
+function pickSpec(msg) {
+  if (!msg || (!msg.command && !msg.argv)) return null;
+  return {
+    argv: msg.argv || msg.command,
+    shell: !!msg.shell,
+    cwd: msg.cwd || null,
+    label: msg.label || null,
+    ephemeral: !!msg.ephemeral,
+  };
 }
 
 function doCreate(conn, msg) {
   if (!probeScript()) return sendErr(conn, 503, 'script_unavailable');
   let s;
-  try { s = sessions.create(msg.cols, msg.rows); }
+  try { s = sessions.create(msg.cols, msg.rows, null, pickSpec(msg)); }
   catch (e) { return sendErr(conn, 429, e.code || 'create_failed'); }
   wireSession(s);
   s.start();
   bind(conn, s.id);
-  conn.send({ type: 'created', sessionId: s.id, pid: s.pid, cols: s.cols, rows: s.rows });
+  conn.send({
+    type: 'created', sessionId: s.id, pid: s.pid, cols: s.cols, rows: s.rows,
+    title: s.title, command: s.spec ? s.spec.argv.join(' ') : null,
+  });
 }
 
 function doAttach(conn, msg) {
   const s = sessions.get(msg.sessionId);
   if (!s) return sendErr(conn, 404, 'session_not_found', msg.sessionId);
   bind(conn, s.id);
-  conn.send({ type: 'session', sessionId: s.id, title: s.title, cols: s.cols, rows: s.rows, alive: !!s.proc });
+  conn.send({ type: 'session', sessionId: s.id, title: s.title, cols: s.cols, rows: s.rows, alive: !!s.proc, command: s.spec ? s.spec.argv.join(' ') : null });
 }
 
 function doInput(conn, msg) {
@@ -229,6 +267,29 @@ function sameOrigin(req) {
   } catch { return false; }
 }
 
+/** 读 JSON body（限长，超了直接丢弃连接） */
+function readJson(req, limit) {
+  return new Promise((resolve) => {
+    let buf = '';
+    let over = false;
+    req.on('data', (chunk) => {
+      if (over) return;
+      buf += chunk;
+      if (buf.length > limit) { over = true; req.destroy(); resolve(null); }
+    });
+    req.on('end', () => { if (!over) { try { resolve(JSON.parse(buf || '{}')); } catch { resolve(null); } } });
+    req.on('error', () => resolve(null));
+  });
+}
+
+function sendJson(res, code, obj) {
+  res.writeHead(code, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store',
+  });
+  res.end(JSON.stringify(obj));
+}
+
 const server = http.createServer((req, res) => {
   if (!sameOrigin(req)) { res.writeHead(403); return res.end('403 cross-origin'); }
   const url = new URL(req.url, 'http://localhost');
@@ -245,6 +306,53 @@ const server = http.createServer((req, res) => {
   }
   if (p === '/' || p === '/index.html') return serveStatic(res, 'index.html');
   if (p.startsWith('/assets/')) return serveStatic(res, p.slice('/assets/'.length));
+
+  /* ── 命令会话（TUI 应用）──
+   *
+   * 桌面壳里双击一个「htop」图标，是先建会话、再开窗口：
+   *   POST /sessions { command, shell, cols, rows, label }
+   *   → { sessionId }
+   * 前端随后 `?session=<id>` attach 到它。
+   *
+   * 为什么不走 WS 的 create：桌面前端在 :3000，本服务在 :3460，跨源。
+   * 桌面壳让**自己的后端**去 fetch（服务端请求不带 Origin，sameOrigin 放行），
+   * 前端永远不跨源。于是「谁能建任意命令会话」这个问题有了明确答案：本机进程，
+   * 不是随便一个网页。浏览器直连这里会被 sameOrigin 挡掉。
+   */
+  if (req.method === 'GET' && p === '/sessions') {
+    return sendJson(res, 200, { sessions: sessions.list() });
+  }
+  if (req.method === 'POST' && p === '/sessions') {
+    return readJson(req, 8192).then((body) => {
+      if (!body) return sendJson(res, 400, { error: 'bad_json' });
+      if (!probeScript()) return sendJson(res, 503, { error: 'script_unavailable' });
+      const spec = normalizeSpec(body);
+      if (!spec) return sendJson(res, 422, { error: 'command_required' });
+      // HTTP 建的会话没有连接，只有窗口：默认按一次性处理（关窗即结束）。
+      // 想留一个常驻的，显式传 ephemeral:false。
+      spec.ephemeral = body.ephemeral !== false;
+
+      let s;
+      try { s = sessions.create(body.cols, body.rows, body.id, spec); }
+      catch (e) { return sendJson(res, 429, { error: e.code || 'create_failed' }); }
+      wireSession(s);
+      try { s.start(); } catch (e) {
+        sessions.close(s.id);
+        return sendJson(res, 500, { error: 'spawn_failed', message: String(e.message || e) });
+      }
+      // 90 秒内没人 attach（窗口没开成 / 前端报错）就当孤儿回收，
+      // 否则一个点不动的图标会白占一个会话名额到 30 分钟空闲回收。
+      const t = setTimeout(() => {
+        const cur = sessions.get(s.id);
+        if (cur && (!cur.conns || cur.conns.size === 0)) sessions.close(s.id);
+      }, 90000);
+      t.unref();
+      return sendJson(res, 200, {
+        sessionId: s.id, pid: s.pid, cols: s.cols, rows: s.rows, title: s.title,
+      });
+    });
+  }
+
   res.writeHead(404); res.end('404');
 });
 
