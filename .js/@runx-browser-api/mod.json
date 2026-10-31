@@ -1,0 +1,10 @@
+{
+  "name": "浏览器能力层（RunX 扩展）",
+  "description": "把浏览器那些「有的地方有、有的地方没有、还有的地方有但会抛异常」的 API 收成一套：能力探测、逐级降级、统一存储。",
+  "version": "0.1.0",
+  "author": "chinartcn",
+  "enabled": true,
+  "core": false,
+  "order": 2,
+  "requires": []
+}

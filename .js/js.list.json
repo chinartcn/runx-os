@@ -1,4 +1,5 @@
 [
+  "@runx-browser-api",
   "@runx-supervisor",
   "@runx-pax",
   "@runx-mounts",
