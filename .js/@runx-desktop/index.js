@@ -299,13 +299,24 @@ module.exports = {
         const n = Number(v);
         return Number.isFinite(n) ? Math.min(max, Math.max(min, Math.round(n))) : dflt;
       };
-      // 旧存档没有 mobileScale —— 补上默认值，否则手机上会按 1:1 渲染（偏大）
+      // 旧存档没有 mobileScale / mobilePreset —— 补上默认值。
+      // mobileScale 缺省 0.85，否则手机上按 1:1 渲染（偏大）；
+      // mobilePreset 缺省 auto，否则历史上给桌面端选的 1280×800 会突然
+      // 在手机上生效，把整个界面压到 26%（工具栏只剩 9px，根本点不到）。
       if (cur.mobileScale == null) cur.mobileScale = 0.85;
+      if (cur.mobilePreset == null) cur.mobilePreset = 'auto';
       if (b.mobileScale != null) {
         const ms = Number(b.mobileScale);
         if (!Number.isFinite(ms)) throw new Error('display.mobileScale 不是数字');
         // 0.5–1.2：低于 0.5 字小到读不清，高于 1.2 反而比 1:1 还大，没有意义
         cur.mobileScale = Math.min(1.2, Math.max(0.5, Math.round(ms * 100) / 100));
+      }
+      // 窄屏专用分辨率：与桌面端的 preset 分开存，互不干扰。
+      if (b.mobilePreset != null) {
+        const mp = String(b.mobilePreset);
+        if (mp === '' || mp === 'auto') cur.mobilePreset = 'auto';
+        else if (DISPLAY_PRESETS.some((p) => p.id === mp)) cur.mobilePreset = mp;
+        else throw new Error('display.mobilePreset 非法：' + mp);
       }
       let preset = b.preset != null ? String(b.preset) : cur.preset;
       const hit = DISPLAY_PRESETS.find((p) => p.id === preset);

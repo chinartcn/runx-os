@@ -429,51 +429,55 @@
   }
 
   /**
-   * 视觉缩放期间还要不要重排：唯一例外是**软键盘真的占位了**。
-   * 把 vv 高度换算回布局高度若明显变矮（键盘通常 250–400px），说明这不是
-   * 纯缩放而是可用区真的少了，该让窗口缩上去；否则锁死布局。
+   * 软键盘是否真的占位了：把 vv 高度换算回布局高度后明显变矮
+   * （键盘通常 250–400px，阈值 120px 足够区分「键盘」与「地址栏伸缩」）。
+   *
+   * 注意它**不看** scale：视觉缩放时也要能识别键盘，用来决定「键盘期间
+   * 不把压缩后的几何写回用户存档」，否则键盘一收窗口就回不去了。
    */
-  function zoomWithKeyboard() {
-    if (!visualZoomed()) return false;
-    var h = physViewport().h;          // 已换算回布局高度
+  function keyboardShrunk() {
+    var h = physViewport().h;
     var lh = window.innerHeight || 0;
     return !!(lh > 0 && h > 0 && h < lh - 120);
   }
 
-  /** 当前要不要「把布局钉死」：视觉缩放中、且不是键盘占位。 */
+  /** 当前要不要「把布局钉死」：只要在视觉缩放中，就一律不动。 */
   function shouldHoldLayout() {
-    return visualZoomed() && !zoomWithKeyboard();
+    return visualZoomed();
   }
   /**
-   * 手机上的分辨率回退：以下情况本地回退为「自适应」——
-   *   a) 配置的是桌面尺寸预设（宽 > 680）—— 1280×800 的桌面在 390px 宽的
-   *      手机上会被等比缩到 30%，导航条和 Dock 小到没法点；
-   *   b) 预设宽高比与可视区宽高比差异过大 —— 如 414×896 的竖屏预设放到
-   *      844×390 的横屏上，铺满缩放会放大 2 倍并把导航条/Dock 裁到视口外。
-   * 配置本身不动（回到桌面端仍然生效），只在窄形态下临时按物理视口排布；
-   * 想看「手机分辨率桌面」可显式选比例合适的窄预设，不会被回退。
+   * 当前端**实际生效**的分辨率预设尺寸，没有则 null。
    *
-   * ⚠ 只回退「逻辑尺寸」，**不回退用户显式选的固定缩放倍数**。
-   *   以前这里一旦回退，displayScale() 就直接 return 1，于是手机上点
-   *   100% / 75% / 125% 全被吃掉（默认预设 w=1280>680 必然命中 a），
-   *   按钮点了等于没按。固定缩放是用户的显式选择，不该被自动策略覆盖 ——
-   *   它只决定「逻辑桌面按预设尺寸布局」，缩放倍数照用户设的执行。
+   * 窄屏与桌面端分开存：窄屏读 `mobilePreset`，桌面读 `preset`。
+   * 为什么不共用：桌面端选 2560×1440 是为了大屏，手机上若跟着生效会把整个
+   * 界面压到 10%（工具栏 4px，点都点不到）；反过来在手机上选的 414×896 也
+   * 不该改变桌面端的布局。历史存档里只有 `preset`，窄屏默认按 auto 渲染，
+   * 行为与以前一致。
    */
-  function mobileAutoOverride() {
-    if (fixedZoom()) return false;      // 用户锁定了缩放倍数 → 尊重用户选择
-    if (!narrow()) return false;
+  function presetSize() {
     var d = cfg && cfg.display;
-    if (!d || !d.preset || d.preset === 'auto' || !(d.w > 0 && d.h > 0)) return false;
-    if (d.w > 680) return true;                       // a) 桌面尺寸预设
-    // b) 比例差异：预设与可视区的宽高比偏离超过 ~35% 时回退
-    var pv = physViewport();
-    if (pv.w > 0 && pv.h > 0) {
-      var wantRatio = pv.w / pv.h;
-      var presetRatio = d.w / d.h;
-      var dev = Math.abs(wantRatio - presetRatio) / wantRatio;
-      if (dev > 0.35) return true;
+    if (!d) return null;
+    if (narrow()) {
+      var id = d.mobilePreset || 'auto';
+      if (id === 'auto' || id === 'custom') return null;
+      var list = (cfg.meta && cfg.meta.display_presets) || [];
+      for (var i = 0; i < list.length; i++) {
+        if (list[i].id === id && list[i].w > 0 && list[i].h > 0) {
+          return { w: list[i].w, h: list[i].h };
+        }
+      }
+      return null;
     }
-    return false;
+    if (d.preset && d.preset !== 'auto' && d.w > 0 && d.h > 0) return { w: d.w, h: d.h };
+    return null;
+  }
+
+  /** 当前端选中的分辨率 id（UI 勾选状态用） */
+  function activePresetId() {
+    var d = cfg && cfg.display;
+    if (!d) return 'auto';
+    if (narrow()) return d.mobilePreset || 'auto';
+    return d.preset || 'auto';
   }
   /** 是否用户显式锁定了缩放倍数（scale 为数字而非 'fit'/空） */
   function fixedZoom() {
@@ -505,43 +509,58 @@
     if (!isFinite(n) || n <= 0) n = 0.85;
     return Math.min(1.2, Math.max(0.5, n));
   }
-  /** 逻辑桌面尺寸：设了虚拟分辨率就用它，否则等于物理视口（自适应） */
+  /**
+   * 逻辑桌面尺寸。
+   *
+   * ── 桌面端 ──
+   * 选了预设就按预设布局，交给 `displayScale()` 铺满缩放；自适应就等视口。
+   *
+   * ── 窄屏（手机）──
+   * 预设的**宽**才是有效信息，`h` 由屏幕比例反推：
+   *   逻辑宽 = 基准宽 ÷ 界面缩放（基准宽 = 预设宽；没选预设则为物理宽）
+   *   缩放比 = 物理宽 ÷ 逻辑宽      → 宽度正好铺满
+   *   逻辑高 = 物理高 ÷ 缩放比      → 高度也正好铺满
+   * 为什么不直接用预设的 h：竖屏 390×844 下 1280×800 按宽度铺满后高度只剩
+   * 244px，下方露出一大片宿主背景；按高度铺满则横向只看得见左侧 29%，右边
+   * 的图标点都点不到。宽度定标是唯一既铺满、又不裁切、还能让不同预设真的
+   * 排出不同信息密度的做法 —— 以前窄屏一律回退成自适应，于是「调哪个分辨率
+   * 都显示同一个」，只有界面大小百分比有用。
+   */
   function viewport() {
-    var z = mobileZoom();
     var pv = physViewport();
-    // 窄形态：逻辑桌面 = 可视区 ÷ 界面缩放。取整避免 subpixel 让元素毛边。
-    if (z !== 1) {
-      return { w: Math.max(1, Math.round(pv.w / z)), h: Math.max(1, Math.round(pv.h / z)) };
+    var z = mobileZoom();
+    var ps = presetSize();
+    if (narrow()) {
+      var baseW = ps ? ps.w : pv.w;
+      var w = Math.max(1, Math.round(baseW / z));
+      var s = pv.w / w;
+      return { w: w, h: Math.max(1, Math.round(pv.h / (isFinite(s) && s > 0 ? s : 1))) };
     }
-    if (mobileAutoOverride()) return pv;
-    var d = cfg && cfg.display;
-    if (d && d.preset && d.preset !== 'auto' && d.w > 0 && d.h > 0) {
-      return { w: d.w, h: d.h };
-    }
+    if (ps) return { w: ps.w, h: ps.h };
     return pv;
   }
   /** 当前缩放比：逻辑 → 物理 */
   function displayScale() {
     var d = cfg && cfg.display;
-    // 窄形态的「界面大小」优先：它已经把逻辑尺寸按 1/z 放大过，
-    // 缩放比必须对应地取 z，否则会算出留白或裁切。
-    var z = mobileZoom();
-    if (z !== 1) return z;
-    // 固定缩放：用户显式锁定的倍数优先，不受「手机自适应回退」影响 ——
-    // 它只决定逻辑尺寸用不用预设，不决定缩放倍数。
+    var pv = physViewport();
+    var ps = presetSize();
+    // 窄屏：与 viewport() 的宽度定标一一对应（物理宽 ÷ 逻辑宽）。
+    if (narrow()) {
+      var baseW = ps ? ps.w : pv.w;
+      var s = pv.w / Math.max(1, baseW / mobileZoom());
+      return isFinite(s) && s > 0 ? s : 1;
+    }
+    if (!ps) return 1;
+    // 固定缩放：用户显式锁定的倍数优先于铺满
     if (fixedZoom()) {
       var n = Number(d.scale);
       return isFinite(n) && n > 0 ? n : 1;
     }
-    if (mobileAutoOverride()) return 1;
-    if (!d || !d.preset || d.preset === 'auto' || !(d.w > 0 && d.h > 0)) return 1;
     if (d.scale === 'fit' || d.scale == null) {
-      var pv = physViewport();
       // 取**较大**的一边（cover）：桌面铺满整个可视区，宁可裁掉边缘也不能留白 ——
-      // 缩放的桌面若填不满视口，四周会露出宿主页面（尤其手机上开「桌面版网站」
-      // 或横屏窄预设时），既难看又暴露了这不是真的系统界面。
-      var s = Math.max(pv.w / d.w, pv.h / d.h);
-      return isFinite(s) && s > 0 ? s : 1;
+      // 缩放的桌面若填不满视口，四周会露出宿主页面，既难看又暴露了这不是真的系统界面。
+      var s2 = Math.max(pv.w / ps.w, pv.h / ps.h);
+      return isFinite(s2) && s2 > 0 ? s2 : 1;
     }
     var n2 = Number(d.scale);
     return isFinite(n2) && n2 > 0 ? n2 : 1;
@@ -2110,14 +2129,14 @@
     // 分辨率与强调色的快捷项直接由服务端下发的枚举生成 ——
     // 加一个预设只改服务端，菜单自动多一项，不会两边不同步。
     ((cfg && cfg.meta && cfg.meta.display_presets) || []).forEach(function (p) {
-      var on = ((cfg.display && cfg.display.preset) || 'auto') === p.id;
+      var on = activePresetId() === p.id;
       viewMenu.push({
         label: p.label, glyph: on ? 'check' : '',
         act: function () { setDisplay({ preset: p.id, scale: p.scale || 'fit' }); },
       });
     });
-    // 窄形态：分辨率预设基本都是「给桌面端用的」，手机上真正管用的旋钮是
-    // 整体界面大小 —— 放在这里而不是埋在设置里，手机上少点两层。
+    // 窄形态：分辨率预设按「逻辑宽度」生效（见 viewport()），与界面大小叠加
+    // 决定信息密度；把界面大小放在这里而不是埋在设置里，手机上少点两层。
     if (narrow()) {
       viewMenu.push({ sep: true }, { head: '界面大小' });
       var zNow = mobileZoom();
@@ -2302,7 +2321,7 @@
       { sep: true },
       { head: '显示分辨率' });
     ((cfg && cfg.meta && cfg.meta.display_presets) || []).forEach(function (p) {
-      var on = ((cfg.display && cfg.display.preset) || 'auto') === p.id;
+      var on = activePresetId() === p.id;
       items.push({
         label: p.label, glyph: on ? 'check' : '',
         act: function () { setDisplay({ preset: p.id, scale: p.scale || 'fit' }); },
@@ -2798,7 +2817,7 @@
        整张桌面按 1280×800 布局再等比缩放居中，于是手机和电脑上摆出来的
        窗口位置是一致的。 */
     body.appendChild(el('div', 'section-label', '显示分辨率'));
-    var cur = (cfg.display && cfg.display.preset) || 'auto';
+    var cur = activePresetId();
     var presetWrap = el('div', 'rx-chip-wrap');
     presetWrap.setAttribute('role', 'radiogroup');
     presetWrap.setAttribute('aria-label', '显示分辨率');
@@ -2896,8 +2915,9 @@
     body.appendChild(el('div', 'caption',
       '当前逻辑桌面 ' + viewport().w + ' × ' + viewport().h +
       '，缩放 ' + Math.round(displayScale() * 100) + '%。' +
-      (mobileAutoOverride()
-        ? '手机上已临时回退为自适应（原设置保留，桌面端不受影响）。'
+      (narrow()
+        ? '手机上按「宽度」使用分辨率：预设宽决定一屏排多少内容，高度随屏幕比例补足，' +
+          '再配合「界面大小」调整元素视觉大小。'
         : '桌面按铺满方式缩放，比例不符时边缘会被裁掉。手机横竖屏切换后会自动重算。')));
 
     /* ── 新建窗口的默认尺寸 ── */
@@ -3084,7 +3104,15 @@
    * scale 传 'fit' 等比铺满，或 0.25–3 的数字表示固定缩放。
    */
   function setDisplay(d) {
-    api('/desktop/display', { method: 'PUT', body: JSON.stringify(d) })
+    var body = d;
+    // 窄屏里改分辨率只写 mobilePreset：桌面端的 preset 保持不动。
+    // 两边共用一个字段的话，桌面选了 2560 手机就变成 10% 的迷你界面，
+    // 手机上选的 414 又会把桌面布局改掉 —— 分辨率本来就该按端各管各的。
+    if (d && d.preset != null && narrow()) {
+      body = { mobilePreset: d.preset };
+      if (d.mobileScale != null) body.mobileScale = d.mobileScale;
+    }
+    api('/desktop/display', { method: 'PUT', body: JSON.stringify(body) })
       .then(function () { return reloadDesktop(); })
       .then(function () {
         // 坐标系换了（分辨率 / 界面大小 / 缩放任一变化）：已有窗口按新可用区
@@ -3482,8 +3510,10 @@
    */
   var resizeTimer = null;
   function relayout() {
-    // 视觉缩放期间：布局完全钉死。唯一例外是软键盘真的占位了（见
-    // zoomWithKeyboard），那种情况可用区确实变小，窗口该缩上去。
+    // 视觉缩放期间布局完全钉死 —— 包括「放大 + 键盘同时发生」的情况：
+    // 以前给键盘开了后门（可用区确实变小），结果编辑文件时聚焦放大又触发了
+    // 一次重排，正是「放大可以、视口不能变」被破坏的那条路径。键盘遮挡交给
+    // 浏览器的视觉视口滚动处理，我们不再跟着改布局。
     if (shouldHoldLayout()) return;
 
     // 先重算虚拟显示器的缩放与居中、把桌面钉到真实可视区，
@@ -3491,15 +3521,20 @@
     applyDisplay();
     applyViewportFrame();
     var wa = workArea();
+    // 键盘占用期间可用区临时变矮，窗口会被夹上去。这份「临时几何」绝不能
+    // 写回 rec.geom（用户意图），否则键盘一收，原本贴在底部的窗口就永远停在
+    // 被推上去的位置 —— 也就是「收起键盘后窗口回不来」。
+    var kb = keyboardShrunk();
     order.forEach(function (id) {
       var rec = windows[id];
       if (!rec) return;
       if (rec.fullscreen) { applyGeom(rec, { x: 0, y: 0, w: wa.w, h: wa.h }); return; }
       if (rec.maximized) { applyGeom(rec, { x: 0, y: 0, w: wa.w, h: wa.h }); return; }
-      // 与拖动同一套约束：窗口完整留在可用区内
-      var cg = clampGeomToView(currentGeom(rec));
+      // 基准取用户意图几何（rec.geom），不是 DOM 现值：键盘压缩后 DOM 已经
+      // 变矮，再拿它当输入会把压缩结果当成新意愿，越收越靠上。
+      var cg = clampGeomToView(rec.geom || currentGeom(rec));
       applyGeom(rec, cg);
-      rec.geom = cg;
+      if (!kb) rec.geom = cg;
     });
   }
   function scheduleRelayout() {
