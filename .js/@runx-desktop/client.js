@@ -777,6 +777,7 @@
     var src = base + (base.indexOf('?') >= 0 ? '&' : '?') +
       'session=' + encodeURIComponent(sessionId) +
       '&ephemeral=1' +
+      '&ns=tui' +
       '&title=' + encodeURIComponent(label);
 
     // 终端按字符格排版，窗口太窄会频繁换行、太宽则浪费 —— 给一个「能装下

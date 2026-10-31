@@ -32,7 +32,7 @@ const cp = require('child_process');
  */
 const KERNEL_PKGS = (() => {
   const base = path.resolve(__dirname, '../../packages');
-  return ['runx-host', 'runx-sdk']
+  return ['runx-host', 'runx-sdk', 'runx-pty']
     .map((d) => path.join(base, d))
     .filter((d) => { try { return fs.statSync(d).isDirectory(); } catch (e) { return false; } });
 })();

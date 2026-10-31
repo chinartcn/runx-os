@@ -1,0 +1,33 @@
+{
+  "name": "@runx/pty",
+  "version": "0.1.0",
+  "description": "RunX 伪 PTY 会话组件：真终端（行编辑/颜色/信号/窗口尺寸），零原生依赖。",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "lib/",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "private": true,
+  "license": "MIT",
+  "homepage": "https://github.com/chinartcn/runx-os/tree/main/packages/runx-pty",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chinartcn/runx-os.git",
+    "directory": "packages/runx-pty"
+  },
+  "bugs": {
+    "url": "https://github.com/chinartcn/runx-os/issues"
+  },
+  "keywords": [
+    "runx",
+    "pty",
+    "terminal",
+    "tui",
+    "shell",
+    "session"
+  ]
+}

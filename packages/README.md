@@ -1,21 +1,23 @@
 # packages/
 
-RunX 提供给**应用开发者**的三个包。都零依赖、MIT；前两个是 Node 包（单文件），
-第三个是给页面用的静态资源（一套 CSS + 一个小脚本）。
+RunX 提供给**应用开发者**的四个包。都零依赖、MIT；三个是 Node 包，最后一个是
+给页面用的静态资源（一套 CSS + 一个小脚本）。
 
 | 包 | 作用 | 什么时候用 |
 |---|---|---|
 | [`@runx/host`](runx-host/) | 桌面 API：通知、子窗口、标题、Dock 角标、事件总线 | 想让应用「像个桌面应用」而不只是个网页 |
 | [`@runx/sdk`](runx-sdk/) | 系统接口：文件、进程、网络、对话框、剪贴板，每次调用走审批 | 想读写自己的目录之外的东西 |
+| [`@runx/pty`](runx-pty/) | 伪 PTY 会话：真终端（行编辑/颜色/信号/窗口尺寸），零原生依赖 | 应用要跑交互式 shell 或 TUI 程序 |
 | [`@runx/ui`](runx-ui/) | 界面组件库：`.rx-*` 类 + `RX.*` 交互，令牌与桌面逐字一致 | 想让页面和窗口外面的桌面长得一样 |
 
 ```js
 const rx = require('@runx/host');   // 我是谁、我该怎么表现
 const os = require('@runx/sdk');    // 我要动这台机器上的东西
+const pty = require('@runx/pty');   // 我要一个真终端
 ```
 
 ```html
-<!-- 第三个不用 require：它是 <link> + <script> -->
+<!-- 最后一个不用 require：它是 <link> + <script> -->
 <link rel="stylesheet" href="http://127.0.0.1:3000/runx/ui/runx-ui.css">
 ```
 
@@ -26,11 +28,11 @@ const os = require('@runx/sdk');    // 我要动这台机器上的东西
 
 ## 分发方式：git，不是 npm
 
-这两个包**不发 npm**（`package.json` 里 `private: true`，`npm publish` 会直接拒绝）。源码就是发行版，装法有三种。
+这三个 Node 包**不发 npm**（`package.json` 里 `private: true`，`npm publish` 会直接拒绝）。源码就是发行版，装法有三种。
 
 ### 1. 一键挂载（推荐）
 
-仓库里带一个脚本，把两个 Node 包软链进应用：
+仓库里带一个脚本，把三个 Node 包软链进应用：
 
 ```bash
 node packages/link.js              # 看谁挂了、谁没挂
@@ -46,7 +48,7 @@ node packages/link.js --all        # 挂进所有 node 应用
 
 ```bash
 cd apps/notes
-npm i ../../packages/runx-sdk ../../packages/runx-host
+npm i ../../packages/runx-sdk ../../packages/runx-host ../../packages/runx-pty
 ```
 
 npm 也会建软链（`file:` 目录依赖的默认行为），效果和 `link.js` 一样，只是每个应用要敲一次。
@@ -72,11 +74,11 @@ npm i github:chinartcn/runx-os#path:packages/runx-sdk # → #path: 被忽略
 
 ---
 
-## 围栏与这两个包的关系
+## 围栏与这三个包的关系
 
-装了 [`@runx-node-safety`](../.js/@runx-node-safety/README.md) 的应用跑在 Node 权限模型里，只能读自己目录。而这两个 Node 包在 `packages/` 下 —— 应用目录之外。
+装了 [`@runx-node-safety`](../.js/@runx-node-safety/README.md) 的应用跑在 Node 权限模型里，只能读自己目录。而这三个 Node 包在 `packages/` 下 —— 应用目录之外。
 
-这不会把应用卡住：围栏在生成 `--allow-fs-read` 时会**自动放行这两个包所在的目录**（毕竟「能走审批」的前提是能 `require('@runx/sdk')`）。围栏仍然挡住其余一切：
+这不会把应用卡住：围栏在生成 `--allow-fs-read` 时会**自动放行这三个包所在的目录**（毕竟「能走审批」的前提是能 `require('@runx/sdk')`）。围栏仍然挡住其余一切：
 
 ```console
 $ node --permission --allow-fs-read=/app --allow-fs-read=.../packages/runx-sdk app.js

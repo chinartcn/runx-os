@@ -9,66 +9,135 @@
  *   · WS  ：/ws/term，终端 I/O 双向流
  *
  * 所有终端 I/O 走应用自己的 WS（内核 event-bus 是发布/订阅语义，不适合流式 I/O）。
+ *
+ * ## 命名空间：终端 shell 与 TUI 是两套东西
+ *
+ * 这个服务同时服务两类会话：
+ *
+ *   · `terminal` —— 用户自己在终端标签页里开的交互式 shell。要能刷新后恢复、
+ *     要长期存活。桌面打开终端应用时用的是这个。
+ *   · `tui` —— 桌面上双击一个命令图标开出来的一次性窗口（htop / free -h）。
+ *     进程跑完窗口就关，不该混进终端的标签栏，也不该占终端的名额。
+ *
+ * 早期两类混在一起，后果是：TUI 会话被写进终端的 localStorage 恢复列表，
+ * 终端刷新时把它当成 shell 标签恢复出来，第一个标签页于是绑到一个死会话上，
+ * 表现为「第一个标签页不能打字」。现在两套在协议层就分开（见 lib/pty.js
+ * 与 public/term.js），配额、恢复列表、回收策略各自独立。
  */
 
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
 const ws = require('./lib/ws');
 const host = require('./lib/host');
-const { SessionManager, normalizeSpec, probeScript, probeSttyFileMode, MAX_SESSIONS, GRACE_MS } = require('./lib/pty');
+const {
+  SessionManager, normalizeSpec, probeScript, probeSttyFileMode, GRACE_MS,
+} = require('./lib/pty');
 
 const PORT = Number(process.env.PORT) || 3460;
 const HOST = process.env.TERM_HOST || '0.0.0.0';
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const START_TS = Date.now();
 
+/** 命名空间常量 —— 前端用 URL 参数声明自己是哪一类 */
+const NS_TERMINAL = 'terminal';
+const NS_TUI = 'tui';
+
+// 两个命名空间的「连接全断后宽限多久再回收」。
+// terminal 给得宽一些：页面刷新、切走再切回来都还在，终端不该「一碰就没」。
+// tui 本来就是一次性的，宽限为 0（由 unbind 直接回收）。
+const GRACE_BY_NS = {
+  [NS_TERMINAL]: Number(process.env.TERM_GRACE_MS || 30000),
+  [NS_TUI]: 0,
+};
+
 const sessions = new SessionManager();
-// Dock 角标跟着会话数走：窗口最小化后也能看出「终端里还挂着几个」
-sessions.onChange = (n) => host.badge(n);
+// Dock 角标跟着终端自己的会话数走：窗口最小化后也能看出「终端里还挂着几个」
+sessions.onChange = () => host.badge(sessions.count(NS_TERMINAL));
 const connsBySession = new Map(); // sessionId -> Set<conn>
 const pendingToReap = new Map();  // sessionId -> timeout（conn 全断后的宽限回收）
 
-/* ── 会话 ↔ 连接 绑定 ── */
+/* ── 会话 ↔ 连接 绑定 ──
+ *
+ * 一个 WS 连接可以同时连着多个会话（终端页面一条 WS 管全部标签页），
+ * 所以绑定关系是双向的：conn 上记一组 sessionId，session 上记一组 conn。
+ * 早期只记 `conn.sessionId` 一个字段 —— 后绑的覆盖先绑的，连接断开时
+ * 只解绑最后一个，其余会话的 conns 里一直留着死连接：输出发给了空气，
+ * 用户看到的现象就是「打字没反应」。
+ */
 function bind(conn, sessionId) {
   let set = connsBySession.get(sessionId);
   if (!set) { set = new Set(); connsBySession.set(sessionId, set); }
   set.add(conn);
-  conn.sessionId = sessionId;
+  if (!conn.sessions) conn.sessions = new Set();
+  conn.sessions.add(sessionId);
+  conn.sessionId = sessionId; // 兼容：未显式指定 sessionId 时的默认值
   const s = sessions.get(sessionId);
   if (s) { s.conns = set; s.lastActive = Date.now(); }
   // 若该会话正被宽限回收，取消
   const t = pendingToReap.get(sessionId);
   if (t) { clearTimeout(t); pendingToReap.delete(sessionId); }
 }
+
 function unbind(conn) {
-  const sid = conn.sessionId;
-  if (!sid) return;
-  const set = connsBySession.get(sid);
-  if (set) { set.delete(conn); if (set.size === 0) connsBySession.delete(sid); }
-  // conn 全断 → 宽限后回收该会话（避免仅刷新页面就丢 shell）
-  if (!connsBySession.has(sid)) {
+  if (!conn.sessions || !conn.sessions.size) {
+    // 兼容老路径：只记了一个 sessionId
+    if (conn.sessionId) { const one = conn.sessionId; conn.sessions = new Set([one]); }
+    else return;
+  }
+  const ids = Array.from(conn.sessions);
+  conn.sessions = new Set();
+
+  for (const sid of ids) {
+    const set = connsBySession.get(sid);
+    if (set) { set.delete(conn); if (set.size === 0) connsBySession.delete(sid); }
+    if (connsBySession.has(sid)) continue; // 还有别的连接连着
+
     const sess = sessions.get(sid);
     // 一次性命令（TUI 图标）：窗口就是进程的外壳，关了窗口进程就该结束。
     // 宽限期的存在理由是「刷新页面别丢 shell」，对一条 `htop` 不成立。
-    if (sess && sess.spec && sess.spec.ephemeral) { sessions.close(sid); return; }
+    if (sess && sess.spec && sess.spec.ephemeral) { closeSession(sid); continue; }
+
+    const grace = GRACE_BY_NS[sess ? sess.ns : NS_TERMINAL] ?? GRACE_MS;
+    if (grace <= 0) { closeSession(sid); continue; }
     const t = setTimeout(() => {
       pendingToReap.delete(sid);
-      if (!connsBySession.has(sid) && sessions.get(sid)) {
-        sessions.close(sid);
-      }
-    }, GRACE_MS);
+      if (!connsBySession.has(sid) && sessions.get(sid)) closeSession(sid);
+    }, grace);
     t.unref();
     pendingToReap.set(sid, t);
   }
 }
+
 function broadcast(sessionId, obj) {
   const set = connsBySession.get(sessionId);
   if (!set) return 0;
   let n = 0;
   for (const c of set) { try { c.send(obj); n++; } catch { /* ignore */ } }
   return n;
+}
+
+/**
+ * 关掉一个会话。
+ *
+ * @param {string} sid
+ * @param {boolean} [notify] 是否广播 closed（显式关闭才广播；进程自己退出
+ *   或连接已断时不必——对端已经知道发生了什么，再广播反而会把用户正在看的
+ *   输出一起清掉）。
+ */
+function closeSession(sid, notify) {
+  if (notify) broadcast(sid, { type: 'closed', sessionId: sid });
+  const set = connsBySession.get(sid);
+  if (set) {
+    for (const c of set) {
+      if (c.sessions) c.sessions.delete(sid);
+      if (c.sessionId === sid) c.sessionId = null;
+    }
+    connsBySession.delete(sid);
+  }
+  const t = pendingToReap.get(sid);
+  if (t) { clearTimeout(t); pendingToReap.delete(sid); }
+  sessions.close(sid);
 }
 
 /* ── 会话输出 → WS（base64 承载原始字节，避免 chunk 边界切断 UTF-8/ANSI）── */
@@ -89,7 +158,7 @@ function wireSession(s) {
         // 还有人连着 → 窗口还开着，用户正在看最后的输出，别删。
         // 没人连着说明窗口已经关了（unbind 那条路会更快地回收）。
         if (cur === sess && !cur.proc && (!cur.conns || cur.conns.size === 0)) {
-          sessions.close(sess.id);
+          closeSession(sess.id);
         }
       }, 5000);
       t.unref();
@@ -120,22 +189,61 @@ function sendErr(conn, code, message, sessionId) {
   conn.send(Object.assign({ type: 'error', code, message }, sessionId ? { sessionId } : {}));
 }
 
+/** 连接属于哪个命名空间：前端在 hello 里声明（URL 参数决定的） */
+function nsOf(conn) {
+  return conn.ns === NS_TUI ? NS_TUI : NS_TERMINAL;
+}
+
 function doHello(conn, msg) {
+  conn.ns = msg.ns === NS_TUI ? NS_TUI : NS_TERMINAL;
+  const ns = nsOf(conn);
+  const cfg = sessions.namespaces[ns] || {};
+
+  // 记住客户端想恢复的会话（下次 hello 也会带，用于重连后重新绑定）
+  conn.resume = Array.isArray(msg.resume) ? msg.resume.slice(0, 32) : [];
+
+  // 命中的会话：重新绑定连接（否则输出发给了空气）+ 回推历史输出
+  const resumed = [];
+  const missing = [];
+  for (const id of conn.resume) {
+    const s = sessions.get(id);
+    if (!s || s.ns !== ns) { missing.push(id); continue; }
+    bind(conn, s.id);
+    resumed.push(s.id);
+  }
+
   conn.send({
     type: 'welcome',
     pty: !!probeScript(),
     shell: process.env.TERM_SHELL || 'bash',
     cols: msg.cols || 80, rows: msg.rows || 24,
-    max_sessions: MAX_SESSIONS,
+    max_sessions: cfg.max || 8,
+    ns,
+    resumed,
+    missing,
     server_ts: Date.now(),
   });
-  // 若前端带了想恢复的 sessionId 列表 → 告知哪些还活着
-  if (Array.isArray(msg.resume)) {
-    for (const id of msg.resume) {
-      const s = sessions.get(id);
-      if (s) conn.send({ type: 'session', sessionId: s.id, title: s.title, cols: s.cols, rows: s.rows, alive: true, command: s.spec ? s.spec.argv.join(' ') : null });
-    }
-  }
+
+  // 会话详情与历史输出单独推 —— 前端据此重建终端屏幕
+  for (const id of resumed) sendSession(conn, sessions.get(id));
+}
+
+/** 把会话详情（含输出历史）发给一个连接 */
+function sendSession(conn, s) {
+  if (!s) return;
+  const hist = s.historySnapshot ? s.historySnapshot() : Buffer.alloc(0);
+  conn.send({
+    type: 'session',
+    sessionId: s.id,
+    title: s.title,
+    cols: s.cols,
+    rows: s.rows,
+    alive: !!s.proc,
+    ns: s.ns,
+    command: s.spec ? s.spec.argv.join(' ') : null,
+    // 输出历史：刷新 / 重连后屏幕不至于一片空白
+    history_b64: hist.length ? hist.toString('base64') : null,
+  });
 }
 
 /**
@@ -157,23 +265,26 @@ function pickSpec(msg) {
 
 function doCreate(conn, msg) {
   if (!probeScript()) return sendErr(conn, 503, 'script_unavailable');
+  const ns = nsOf(conn);
   let s;
-  try { s = sessions.create(msg.cols, msg.rows, null, pickSpec(msg)); }
+  try { s = sessions.create(msg.cols, msg.rows, null, pickSpec(msg), { ns }); }
   catch (e) { return sendErr(conn, 429, e.code || 'create_failed'); }
   wireSession(s);
   s.start();
   bind(conn, s.id);
   conn.send({
     type: 'created', sessionId: s.id, pid: s.pid, cols: s.cols, rows: s.rows,
-    title: s.title, command: s.spec ? s.spec.argv.join(' ') : null,
+    title: s.title, ns: s.ns, command: s.spec ? s.spec.argv.join(' ') : null,
   });
 }
 
 function doAttach(conn, msg) {
   const s = sessions.get(msg.sessionId);
   if (!s) return sendErr(conn, 404, 'session_not_found', msg.sessionId);
+  // 命名空间隔离：终端页面不许接管 TUI 会话，反之亦然
+  if (s.ns !== nsOf(conn)) return sendErr(conn, 403, 'ns_mismatch', msg.sessionId);
   bind(conn, s.id);
-  conn.send({ type: 'session', sessionId: s.id, title: s.title, cols: s.cols, rows: s.rows, alive: !!s.proc, command: s.spec ? s.spec.argv.join(' ') : null });
+  sendSession(conn, s);
 }
 
 function doInput(conn, msg) {
@@ -213,18 +324,8 @@ function doClose(conn, msg) {
   const sid = msg.sessionId || conn.sessionId;
   const s = sessions.get(sid);
   if (!s) return sendErr(conn, 404, 'session_not_found', sid);
-
-  // 先广播 closed（此时连接仍在 set 里，能收到通知），再解绑并销毁会话
-  broadcast(sid, { type: 'closed', sessionId: sid });
-
-  const set = connsBySession.get(sid);
-  if (set) {
-    for (const c of set) { c.sessionId = null; }
-    connsBySession.delete(sid);
-  }
-  const t = pendingToReap.get(sid);
-  if (t) { clearTimeout(t); pendingToReap.delete(sid); }
-  sessions.close(sid);
+  // 显式关闭：广播 closed（此时连接仍在 set 里，能收到通知），再销毁会话
+  closeSession(sid, true);
 }
 
 /* ── HTTP 静态服务 ── */
@@ -308,6 +409,10 @@ const server = http.createServer((req, res) => {
       host: host.status(),
       // resize 方式：inplace = 原地 ioctl（不重启前台程序）；respawn = 回落重建
       resize: probeSttyFileMode() ? 'inplace' : 'respawn',
+      // 两个命名空间各自的会话数与配额
+      namespaces: Object.keys(sessions.namespaces).map((k) => ({
+        ns: k, count: sessions.count(k), max: sessions.namespaces[k].max,
+      })),
     }));
   }
   if (p === '/' || p === '/index.html') return serveStatic(res, 'index.html');
@@ -324,9 +429,13 @@ const server = http.createServer((req, res) => {
    * 桌面壳让**自己的后端**去 fetch（服务端请求不带 Origin，sameOrigin 放行），
    * 前端永远不跨源。于是「谁能建任意命令会话」这个问题有了明确答案：本机进程，
    * 不是随便一个网页。浏览器直连这里会被 sameOrigin 挡掉。
+   *
+   * 这条路建出来的会话属于 `tui` 命名空间：和终端的 shell 标签页分开算配额、
+   * 分开恢复、分开回收。
    */
   if (req.method === 'GET' && p === '/sessions') {
-    return sendJson(res, 200, { sessions: sessions.list() });
+    const ns = url.searchParams.get('ns');
+    return sendJson(res, 200, { sessions: sessions.list(ns || undefined) });
   }
   if (req.method === 'POST' && p === '/sessions') {
     return readJson(req, 8192).then((body) => {
@@ -339,7 +448,7 @@ const server = http.createServer((req, res) => {
       spec.ephemeral = body.ephemeral !== false;
 
       let s;
-      try { s = sessions.create(body.cols, body.rows, body.id, spec); }
+      try { s = sessions.create(body.cols, body.rows, body.id, spec, { ns: NS_TUI }); }
       catch (e) { return sendJson(res, 429, { error: e.code || 'create_failed' }); }
       wireSession(s);
       try { s.start(); } catch (e) {
@@ -350,11 +459,11 @@ const server = http.createServer((req, res) => {
       // 否则一个点不动的图标会白占一个会话名额到 30 分钟空闲回收。
       const t = setTimeout(() => {
         const cur = sessions.get(s.id);
-        if (cur && (!cur.conns || cur.conns.size === 0)) sessions.close(s.id);
+        if (cur && (!cur.conns || cur.conns.size === 0)) closeSession(s.id);
       }, 90000);
       t.unref();
       return sendJson(res, 200, {
-        sessionId: s.id, pid: s.pid, cols: s.cols, rows: s.rows, title: s.title,
+        sessionId: s.id, pid: s.pid, cols: s.cols, rows: s.rows, title: s.title, ns: s.ns,
       });
     });
   }
@@ -375,6 +484,8 @@ ws.attach(server, '/ws/term', (conn) => {
       }
     } catch { /* ignore */ }
   }
+  conn.ns = NS_TERMINAL; // hello 之前先给个默认值
+  conn.sessions = new Set();
   conn.onMessage = (raw) => handleMessage(conn, raw);
   conn.onClose = () => unbind(conn);
 });

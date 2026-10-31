@@ -34,7 +34,7 @@ const path = require('path');
 const ROOT = path.resolve(__dirname, '..');
 const APPS = path.join(ROOT, 'apps');
 
-const PKGS = ['runx-host', 'runx-sdk'].map((dir) => {
+const PKGS = ['runx-host', 'runx-sdk', 'runx-pty'].map((dir) => {
   const full = path.join(__dirname, dir);
   let name = dir;
   let version = '?';

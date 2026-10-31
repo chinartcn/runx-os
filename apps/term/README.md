@@ -17,7 +17,7 @@ term/
 ├── icon.svg            # 桌面图标
 ├── lib/
 │   ├── ws.js           # 零依赖 WebSocket 服务端（RFC6455 子集）
-│   ├── pty.js          # 伪 PTY 会话管理（基于 util-linux `script`）
+│   ├── pty.js          # PTY 能力的转发层（真实实现在 @runx/pty 组件包）
 │   └── host.js         # 与桌面的可选集成：Dock 角标 / 长任务完成通知
 └── public/
     ├── index.html       # 标签栏 + 终端容器 + 工具栏
@@ -25,6 +25,10 @@ term/
     ├── term.js          # 单 WS 多 Terminal，标签/主题/字号/重连
     └── vendor/          # 离线打包的 xterm.js + addon-fit
 ```
+
+> PTY 能力已经抽成独立组件包 [`@runx/pty`](../../packages/runx-pty/)：
+> 伪 PTY 会话、命名空间隔离、输出历史回放都在那里，别的应用（IDE、
+> 日志查看器、任何要跑交互式程序的）可以直接复用。`lib/pty.js` 只是转发层。
 
 ---
 
@@ -89,13 +93,62 @@ Node 侧轮询读一次得到 slave 路径，之后每次 resize 只跑一条 `s
 
 | 方向 | 类型 | 说明 |
 |---|---|---|
-| C→S | `hello` | 握手，可带 `resume:[sessionId]` 恢复 |
+| C→S | `hello` | 握手，带 `ns`（命名空间）与 `resume:[sessionId]` 恢复 |
 | C→S | `create` | 新建会话（`cols`/`rows`） |
 | C→S | `attach` / `input` / `resize` / `close` / `ping` | |
-| S→C | `welcome` / `created` / `session` / `output` / `exit` / `closed` / `resized` / `error` / `pong` | |
+| S→C | `welcome` | 带 `ns`、`resumed`（已重绑的会话）、`missing`（已失效的） |
+| S→C | `created` / `session` / `output` / `exit` / `closed` / `resized` / `error` / `pong` | |
 
 **输出用 base64（`data_b64`）承载原始字节** —— 避免 UTF-8 多字节字符或 ANSI 转义序列
 在 WS chunk 边界被切断。
+
+### 5. 命名空间：终端 shell 与 TUI 是两套东西
+
+同一个后端同时服务两类会话：
+
+| 命名空间 | 谁开的 | 特点 |
+|---|---|---|
+| `terminal` | 用户自己开的终端标签页 | 多标签、可刷新恢复、长期存活 |
+| `tui` | 桌面上双击命令图标 | 一次性、窗口关掉进程就结束 |
+
+**早期这两类是混在一起的**，后果很具体：TUI 窗口与终端窗口同源（都在 `:3460`），
+共享同一个 `localStorage['runx.term.sessions']`。TUI 窗口 attach 成功后把会话 id
+写进了终端的恢复列表；终端刷新时把它当成 shell 标签恢复出来，第一个标签页于是
+绑到一个已经死掉的会话上 —— **表现为「第一个标签页不能打字」**。
+
+现在隔开了：
+
+- **协议层**：`hello` 声明 `ns`；`attach` 时校验会话的 `ns` 与连接一致，不一致回
+  `ns_mismatch`。终端接管不了 TUI 会话，反之亦然。
+- **配额层**：`terminal` 与 `tui` 各有各的上限（各 8），TUI 开满不影响用户开 shell 标签页。
+- **回收层**：`terminal` 断连后有 30 秒宽限（刷新页面别丢 shell）；`tui` 断连即回收。
+- **前端层**：TUI 模式（`?ns=tui`）隐藏标签栏与「+」按钮、不进终端的恢复列表、
+  标签名只给被点名的那个会话。
+
+### 6. 防重置：屏幕不空
+
+终端「刷新后屏幕空白」是很烦的体验：进程还在、shell 状态还在，但屏幕是空的，
+用户得重新 `ls` 一遍才敢确认自己还在原来的目录。
+
+做法是每个会话留一个**输出历史环形缓冲**（最近 256KB，见 `@runx/pty`）：
+
+- 客户端 attach / 重连时，服务端把这段历史一并送回（`session.history_b64`）
+- 前端在**新建终端实例**时回放它 —— 同一页面里 WS 断线重连时实例还在、屏幕本来
+  就有内容，不重复回放
+
+于是刷新页面后：标签页照旧恢复，屏幕内容也回来了，而且是「真的发生过的那几行」。
+
+另外修了几处让终端「看起来被重置」的细节：
+
+- `conn.sessionId` 原本只记一个 id，但一条 WS 连着多个标签页 —— 后绑的覆盖先绑的，
+  连接断开时只解绑最后一个，其余会话的连接集合里一直留着死连接，**输出发给了空气**。
+  现在连接上记的是一组 id。
+- 恢复列表的过滤条件原本写反了（保留已消失的会话、丢掉活着的），于是恢复列表里
+  全是死 id，刷新后怎么恢复都恢复不回来。
+- `session_not_found` 时只从 `state.sessions` 删、没从 `state.order` 删 —— 顺序错位
+  之后 `activate` 会把所有终端的高亮都取消，看上去就是「标签页点不动、也打不了字」。
+- `.term-host` 原本用 `display:none` 隐藏，xterm `open()` 时量不到容器尺寸，FitAddon
+  之后也算不出行列数。改成 `visibility` 隐藏：布局尺寸还在，只是不显示。
 
 ---
 
@@ -120,7 +173,8 @@ supervisor 启动时经 `os.spawn` 透传给应用进程：
 | `TERM_SHELL` | `bash` | 要启动的 shell |
 | `TERM_SHELL_ARGS` | 空 | 附加参数，会拼在 `-i` **之前**（bash 要求长选项在前） |
 | `TERM_ROOT_CWD` | `$HOME` | 会话起始目录 |
-| `TERM_MAX_SESSIONS` | `8` | 并发会话上限 |
+| `TERM_MAX_SESSIONS` | `8` | 并发会话上限（总） |
+| `TERM_GRACE_MS` | `30000` | 终端会话断连后的宽限期（这段时间内刷新可恢复） |
 
 > **关于 `TERM_SHELL_ARGS`**：默认空值 = 读取用户 `~/.bashrc`，得到真实环境（别名 / PATH /
 > 提示符）。如果某些 rc 片段与 bash 不兼容（例如误 source 了 zsh 补全脚本，启动时报
@@ -180,7 +234,7 @@ curl -s -X POST http://127.0.0.1:4125/runx/desktop/icons \
 2. **不随桌面自动停靠**：`appex.json` 里 `autostart:false`；窗口关闭后后端仍在跑，
    会话保留 30 分钟（无连接空闲）后回收。
 3. **进程重启后 sessionId 失效**：后端重启后旧会话不存在，前端重连时 `resume` 只能恢复
-   还活着的那部分，其余需要新建。
+   还活着的那部分，其余需要新建（失效的那些会被自动从恢复列表里清掉，不会错位）。
 4. **单机单用户假设**：Origin 同源校验用于防跨站驱动 RCE；若要暴露到公网，请置于
    反向代理 + 鉴权之后。
 

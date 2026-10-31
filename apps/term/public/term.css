@@ -71,12 +71,27 @@ html, body {
 .status.ok .dot { background: #4ec26a; }
 .status.bad .dot { background: #e2595b; }
 
-/* ── 终端区 ── */
+/* ── 终端区 ──
+   .term-host 不能用 display:none —— xterm 在 open() 时要量容器尺寸，
+   容器 display:none 的话量到 0，FitAddon 之后也算不出行列数，终端就停在
+   初始的 80x24（甚至出现输入错位）。改用 visibility 隐藏：布局尺寸还在，
+   只是看不见，也接不到鼠标事件。 */
 .terminals { flex: 1 1 auto; position: relative; overflow: hidden; }
-.term-host { position: absolute; inset: 0; padding: 6px 8px; display: none; }
-.term-host.active { display: block; }
+.term-host {
+  position: absolute; inset: 0; padding: 6px 8px;
+  visibility: hidden; opacity: 0;
+  transition: opacity .12s;
+}
+.term-host.active { visibility: visible; opacity: 1; }
 .term-host .xterm { height: 100%; }
 .term-host .xterm-viewport { background: transparent !important; }
+
+/* ── TUI 模式（桌面上双击命令图标开出来的窗口）──
+   只有一个终端，没有标签栏、没有「+」按钮 —— 用户要的是那条命令的输出，
+   不是另一个 shell。 */
+body.mode-tui .tabs { display: none; }
+body.mode-tui .terminals { padding: 0; }
+
 
 /* ── 提示条 ── */
 .hint {
