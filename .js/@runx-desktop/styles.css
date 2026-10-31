@@ -1379,3 +1379,87 @@
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
+
+/* ── 应用通知 ────────────────────────────────────────────────────────
+   应用通过桌面 API 发来的通知：右上角浮层。和 toast 的区别是它带来源
+   应用图标与标题 —— toast 是桌面自己的回执，通知是应用在说话。
+   放在 .rx-vscreen 里（不是 body），跟随虚拟分辨率缩放，位置才和设备无关。 */
+#runx-desktop .rx-notices {
+  position: absolute;
+  top: 12px; right: 12px;
+  z-index: 520;
+  width: min(320px, 76vw);
+  display: grid; gap: 8px;
+  pointer-events: none;
+}
+#runx-desktop .rx-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 11px 12px;
+  border-radius: 13px;
+  background: var(--surface-window);
+  border: 0.5px solid var(--hairline-strong);
+  box-shadow: var(--shadow-menu);
+  pointer-events: auto;
+  animation: rx-notice-in 220ms cubic-bezier(.2, .9, .3, 1) both;
+}
+#runx-desktop .rx-notice.out {
+  opacity: 0;
+  transform: translateX(14px);
+  transition: opacity 260ms ease, transform 260ms ease;
+}
+@keyframes rx-notice-in {
+  from { opacity: 0; transform: translateX(18px) scale(0.97); }
+  to   { opacity: 1; transform: none; }
+}
+#runx-desktop .rx-notice-ico {
+  width: 26px; height: 26px;
+  flex: none;
+  border-radius: 7px;
+  object-fit: cover;
+}
+#runx-desktop .rx-notice-body { flex: 1; min-width: 0; }
+#runx-desktop .rx-notice-title {
+  font: var(--font-callout);
+  font-weight: 600;
+  color: var(--label-primary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#runx-desktop .rx-notice-text {
+  margin-top: 2px;
+  font: var(--font-caption);
+  color: var(--label-secondary);
+  line-height: 1.45;
+  /* 正文最多三行：再长就点进应用看，别让通知挡住桌面 */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+#runx-desktop .rx-notice-x {
+  flex: none;
+  width: 20px; height: 20px;
+  border: none; padding: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--label-tertiary);
+  font-size: 15px; line-height: 1;
+  cursor: pointer;
+}
+#runx-desktop .rx-notice-x:hover { background: var(--surface-hover); color: var(--label-primary); }
+
+/* Dock 角标：应用 dock.badge() 设置的未读数 */
+#runx-desktop .rx-dock-item .rx-dock-badge {
+  position: absolute;
+  top: 2px; right: 4px;
+  min-width: 15px; height: 15px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 10px; font-weight: 600; line-height: 15px;
+  text-align: center;
+  box-sizing: border-box;
+  pointer-events: none;
+}

@@ -15,7 +15,50 @@
  */
 
 const API = '/runx';
+const crypto = require('crypto');
 const path = require('path');
+
+/**
+ * 给每个应用一个长期 token。
+ *
+ * 桌面 API（/runx/host）靠它认人：应用**不能自报名字** —— 谁都能在 body 里
+ * 写 `{app:"files"}`，但拿不到 files 的 token。token 存在内核状态目录，由本
+ * 扩展在启动时注入环境变量，桌面扩展按同一份文件反查。
+ *
+ * 为什么不是「每次启动重新生成」：应用被重启时（崩溃重启、手动重启）旧的
+ * token 会立刻失效，正在跑的请求全部 401。稳定 token 也让应用不必在重启后
+ * 重新握手。
+ */
+// 状态存储句柄。onInit 一开始就赋值 —— startApp 会被 reconcile() 在 S 建立
+// 之前调用，那时拿不到 S，但拿得到 os。
+let OSREF = null;
+function readTokens() {
+  if (!OSREF) return {};
+  return OSREF.readState('host-tokens.json', {}) || {};
+}
+function writeTokens(t) {
+  if (OSREF) OSREF.writeState('host-tokens.json', t);
+}
+
+function appToken(name) {
+  const t = readTokens();
+  if (!t[name]) {
+    t[name] = crypto.randomBytes(20).toString('hex');
+    writeTokens(t);
+  }
+  return t[name];
+}
+
+/** 注入给应用的运行环境：名字、令牌、网关地址、自己的端口与数据目录 */
+function runxEnv(entry, cwd) {
+  return {
+    RUNX_APP_NAME: entry.name,
+    RUNX_APP_TOKEN: appToken(entry.name),
+    RUNX_GATEWAY: 'http://127.0.0.1:' + (process.env.PORT || 3000),
+    RUNX_APP_PORT: entry.port ? String(entry.port) : '',
+    RUNX_APP_DATA: path.join(cwd, entry.data_dir || 'data'),
+  };
+}
 
 // 内存运行时：name -> { state, pid, started_at, restart_count, last_exit, ... }
 const runtime = new Map();
@@ -26,6 +69,7 @@ module.exports = {
 
   onInit(ctx) {
     const os = ctx.os;
+    OSREF = os;
     const root = ctx.root;
 
     const loadApps = () => {
@@ -156,7 +200,9 @@ module.exports = {
         cmd: entry.cmd || 'node app.js',
         cwd,
         port: entry.port,
-        env: entry.env || undefined,
+        // appex.json 里的 env 在前，RUNX_* 在后：应用无法用静态配置覆盖
+        // 自己的身份（否则改个 appex.json 就能冒充别的应用）。
+        env: Object.assign({}, entry.env || {}, runxEnv(entry, cwd)),
         onExit: (code, signal) => onExit(entry.name, code, signal),
       };
       const r = os.spawn(app);
@@ -243,6 +289,8 @@ module.exports = {
       json: (status, obj) => ({ status, type: 'application/json; charset=utf-8', body: JSON.stringify(obj) }),
       err: (code, message, data) => ({ status: code, type: 'application/json; charset=utf-8', body: JSON.stringify({ error: { code, message, data } }) }),
       loadApps, getEntry, spawnApp, terminateApp, reconcile, listApps, logsOf, statusOf,
+      // 应用令牌表：与 apps.json 同目录，桌面扩展按同一份文件反查应用身份
+      readTokens, writeTokens,
     };
   },
 

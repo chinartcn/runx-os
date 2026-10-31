@@ -784,6 +784,106 @@
     }
   });
 
+  /* ═══════════════════════════════════════════════════════════════════
+   * 桌面 API：应用经事件总线发来的指令
+   *
+   * 应用侧 SDK 调的是后端（POST /runx/host），后端校验令牌后把指令以
+   * `host.*` 事件发到事件总线；前端订阅这一组事件并执行。绕这一圈的原因
+   * 是应用页面在**另一个源**的 iframe 里，前端没法直接收到它的请求，
+   * 而后端能可靠地认人（令牌），前端只负责表现。
+   * ═══════════════════════════════════════════════════════════════════ */
+
+  function connectHostBus() {
+    // BASE 是完整 origin（http://host:port），不是站点前缀 —— 直接换协议头，
+    // 别再拼 location.host，否则会拼出 http://host:3000http://... 这种怪地址。
+    var ws;
+    try {
+      ws = new WebSocket(BASE.replace(/^http/, 'ws') + API + '/event-bus');
+    } catch (e) { return; }
+    hostBus = ws;
+    ws.onopen = function () {
+      try { ws.send(JSON.stringify({ type: 'sub', pattern: 'host.*' })); } catch (e) { /* 已断 */ }
+    };
+    ws.onmessage = function (ev) {
+      var m;
+      try { m = JSON.parse(ev.data); } catch (e) { return; }
+      if (m && m.type === 'event' && m.event) handleHostEvent(m.event, m.payload || {});
+    };
+    ws.onclose = function () {
+      hostBus = null;
+      // 断线重连：桌面 API 不是关键路径，退避到 8 秒，别和事件总线互相刷
+      hostBusTimer = setTimeout(connectHostBus, 8000);
+    };
+    ws.onerror = function () { try { ws.close(); } catch (e) { /* 忽略 */ } };
+  }
+  var hostBus = null, hostBusTimer = null;
+
+  function handleHostEvent(event, p) {
+    switch (event) {
+      case 'host.notify':
+        showNotification(p);
+        break;
+      case 'host.window.open':
+        openApp(p.app, {
+          src: p.url,
+          title: p.title || p.app,
+          subtitle: 'app',
+          transient: true,      // 应用自己开的窗口，与会话一样不入存档
+          geom: p.w && p.h ? { x: 0, y: 0, w: p.w, h: p.h } : undefined,
+        });
+        break;
+      case 'host.window.title':
+        for (var id in windows) {
+          var rec = windows[id];
+          if (!rec || !rec.app || rec.app.name !== p.app) continue;
+          if (p.title != null && rec.title) rec.title.textContent = p.title;
+          if (p.subtitle != null && rec.subtitle) rec.subtitle.textContent = p.subtitle;
+        }
+        break;
+      case 'host.dock.badge':
+        for (var id2 in windows) {
+          var r2 = windows[id2];
+          if (r2 && r2.app && r2.app.name === p.app) r2.badge = p.count || 0;
+        }
+        renderDock();
+        break;
+    }
+  }
+
+  /** 应用通知：右上角浮层，比 toast 多了标题和来源图标 */
+  function showNotification(n) {
+    var box = vscreen.querySelector('.rx-notices');
+    if (!box) { box = el('div', 'rx-notices'); vscreen.appendChild(box); }
+    var card = el('div', 'rx-notice rx-material-thick');
+
+    var app = appOf(n.app);
+    var url = appIconUrl(app);
+    if (url) {
+      var img = el('img', 'rx-notice-ico');
+      img.src = url; img.alt = '';
+      card.appendChild(img);
+    }
+
+    var body = el('div', 'rx-notice-body');
+    if (n.title) body.appendChild(el('div', 'rx-notice-title', n.title));
+    if (n.body) body.appendChild(el('div', 'rx-notice-text', n.body));
+    card.appendChild(body);
+
+    var x = el('button', 'rx-notice-x', '×');
+    x.setAttribute('aria-label', '关闭通知');
+    x.addEventListener('click', function () { card.remove(); });
+    card.appendChild(x);
+
+    box.appendChild(card);
+    announce((n.title || '通知') + (n.body ? '：' + n.body : ''));
+    // 最多同时 4 条：再多就盖住半个桌面了
+    while (box.children.length > 4) box.firstChild.remove();
+    setTimeout(function () {
+      card.classList.add('out');
+      setTimeout(function () { card.remove(); }, 320);
+    }, 5200);
+  }
+
   /* ── 新建 / 编辑命令 ── */
 
   /** 按命令首词猜一个 emoji：省得每个图标都要手挑 */
@@ -2234,8 +2334,10 @@
       } else {
         b.appendChild(iconSpan('package', 'rx-dock-ico', 16));
       }
-      b.appendChild(el('span', 'rx-dock-name', appTitle(rec.app)));
+      b.appendChild(el('span', 'rx-dock-name', dockLabel));
       b.appendChild(el('span', 'rx-dock-ind'));
+      // 角标由应用通过桌面 API 设置（dock.badge），未读/待办之类
+      if (rec.badge > 0) b.appendChild(el('span', 'rx-dock-badge', String(rec.badge)));
 
       b.addEventListener('click', function () {
         if (rec.hidden || rec.minimized) showWindow(id);
@@ -3962,6 +4064,9 @@
     if (cfg.meta && cfg.meta.assets_base) ASSET_BASE = cfg.meta.assets_base;
     apps = (res[1] && res[1].apps) || [];
     render();
+    // 桌面 API 的接收端：应用的通知、自开窗口、改标题都从这条总线来。
+    // 不与首屏渲染抢时间，失败也只是「应用调不动桌面」，不影响桌面本身。
+    try { connectHostBus(); } catch (e) { /* 环境不支持 WebSocket */ }
     refreshApps()
       .then(function () {
         // 应用状态拿到之后再恢复窗口：node 应用没起来时不该开出一堆死窗口。

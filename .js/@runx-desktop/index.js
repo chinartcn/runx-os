@@ -238,6 +238,146 @@ module.exports = {
       if (icon.command && icon.shell === undefined) icon.shell = false;
     }
 
+    /* ════════════════════════════════════════════════════════════════
+     * 桌面 API：应用 → 桌面
+     *
+     * 应用侧用 packages/runx-host 发起调用，落到 POST /runx/host：
+     *   { method: 'notify', params: { title, body } }  + 头 X-Runx-Token
+     *
+     * 身份**只认 token**：body 里写了什么都不算数。令牌由 supervisor 在
+     * 启动应用时生成并注入环境变量，本扩展从同一份状态文件反查 —— 谁都能
+     * 在请求里自称 files，但拿不到 files 的令牌。
+     * ════════════════════════════════════════════════════════════════ */
+
+    function appByToken(tok) {
+      if (!tok || String(tok).length < 16) return null;
+      const table = os.readState('host-tokens.json', {}) || {};
+      for (const name of Object.keys(table)) {
+        if (table[name] === tok) return name;
+      }
+      return null;
+    }
+
+    /** 通过事件总线把指令推给前端（前端订阅 host.*） */
+    function publishHost(kind, payload) {
+      const port = Number(process.env.PORT) || 3000;
+      return fetch('http://127.0.0.1:' + port + API + '/event-bus', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ event: 'host.' + kind, payload }),
+        signal: AbortSignal.timeout(3000),
+      }).catch(() => null);
+    }
+
+    /** 当前应用（按 token 反查）的端口，用于校验 window.open 的目标 */
+    async function portOfApp(name) {
+      const gw = Number(process.env.PORT) || 3000;
+      try {
+        const r = await fetch('http://127.0.0.1:' + gw + API + '/apps',
+          { signal: AbortSignal.timeout(3000) });
+        const j = await r.json();
+        const a = (j.apps || []).find((x) => x.name === name);
+        return a ? Number(a.port) : 0;
+      } catch (e) { return 0; }
+    }
+
+    function themeSummary(d) {
+      const accentId = d.accent || 'blue';
+      const acc = ACCENTS[accentId] || ACCENTS.blue;
+      return {
+        mode: d.theme || 'auto',
+        accent: acc.light,
+        accentDark: acc.dark,
+        accentId,
+        wallpaper: d.wallpaper || null,
+      };
+    }
+
+    async function hostCall(body, token) {
+      const appName = appByToken(token);
+      if (!appName) throw Object.assign(new Error('令牌无效或已失效'), { code: 401 });
+      const method = String((body && body.method) || '');
+      const p = (body && body.params) || {};
+
+      switch (method) {
+        case 'ping':
+          return { app: appName, api: 1, server_ts: Date.now() };
+
+        case 'theme.get':
+          return themeSummary(load());
+
+        case 'notify': {
+          const title = String(p.title || '').slice(0, 120);
+          const text = String(p.body || '').slice(0, 400);
+          if (!title && !text) throw Object.assign(new Error('title/body 至少给一个'), { code: 422 });
+          await publishHost('notify', { app: appName, title, body: text });
+          return { ok: true };
+        }
+
+        case 'window.open': {
+          const raw = String(p.url || '');
+          if (!raw) throw Object.assign(new Error('缺少 url'), { code: 422 });
+          // 只允许开「自己的」页面：跨源 URL 会把窗口变成一个任意网页的容器，
+          // 从而绕过「窗口 = 应用」这个前提（也就能伪装成别的应用钓鱼）。
+          const port = await portOfApp(appName);
+          let abs;
+          try {
+            abs = new URL(raw, 'http://127.0.0.1:' + (port || 80) + '/').href;
+          } catch (e) {
+            throw Object.assign(new Error('url 不合法'), { code: 422 });
+          }
+          const u = new URL(abs);
+          if (!port || Number(u.port) !== port) {
+            throw Object.assign(new Error('只能打开本应用自己端口下的页面'), { code: 403 });
+          }
+          await publishHost('window.open', {
+            app: appName, url: abs,
+            title: String(p.title || appName).slice(0, 80),
+            w: Number(p.w) || 0, h: Number(p.h) || 0,
+          });
+          return { ok: true, url: abs };
+        }
+
+        case 'window.title': {
+          await publishHost('window.title', {
+            app: appName, title: String(p.title || '').slice(0, 80),
+            subtitle: p.subtitle != null ? String(p.subtitle).slice(0, 80) : null,
+          });
+          return { ok: true };
+        }
+
+        case 'dock.badge': {
+          const n = Number(p.count);
+          await publishHost('dock.badge', { app: appName, count: isFinite(n) ? Math.min(99, Math.max(0, n)) : 0 });
+          return { ok: true };
+        }
+
+        case 'bus.publish': {
+          // 应用发布的事件统一前缀 app.<name>.，避免两个应用撞同一个 topic
+          const topic = String(p.topic || '').replace(/[^a-z0-9.-]/gi, '');
+          if (!topic) throw Object.assign(new Error('缺少 topic'), { code: 422 });
+          const event = 'app.' + appName.replace(/[^a-z0-9-]/gi, '') + '.' + topic;
+          const port = Number(process.env.PORT) || 3000;
+          const r = await fetch('http://127.0.0.1:' + port + API + '/event-bus', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ event, payload: p.payload, wantAck: true }),
+            signal: AbortSignal.timeout(3000),
+          });
+          if (!r.ok) throw Object.assign(new Error('事件总线拒绝了这条事件'), { code: 502 });
+          return { ok: true, event };
+        }
+
+        case 'app.info':
+          return {
+            name: appName,
+            port: await portOfApp(appName),
+            can: ['notify', 'window.open', 'window.title', 'dock.badge', 'theme.get', 'bus.publish'],
+          };
+      }
+      throw Object.assign(new Error('未知方法：' + method), { code: 404 });
+    }
+
     /* ── 命令式快捷方式的启动 ── */
 
     /** term 应用监听的端口：优先 env，其次问 supervisor 要，最后回退默认值 */
@@ -563,7 +703,8 @@ module.exports = {
     }
 
     S = {
-      json, err, load, save, addIcon, patchIcon, delIcon, startTui,
+      json, err, load, save, addIcon, patchIcon, delIcon, startTui, hostCall,
+      publishTheme: () => publishHost('theme', themeSummary(load())),
       addWidget, patchWidget, delWidget, setWallpaper, setTheme, setTaskbar, setGrid, meta,
       setWindows, delWindow,
       // 本轮新增：外观与显示
@@ -654,6 +795,14 @@ module.exports = {
       try { return S.json(200, S.delIcon(id)); } catch (e) { return S.err(404, e.message); }
     }
 
+    if (req.method === 'POST' && p === API + '/host') {
+      const tok = req.headers['x-runx-token'];
+      return Promise.resolve(ctx.readJson().catch(() => ({}))).then((b) =>
+        S.hostCall(b, tok)
+          .then((r) => S.json(200, { ok: true, result: r }))
+          .catch((e) => S.err(e.code || 500, e.message)));
+    }
+
     if (req.method === 'POST' && p === API + '/desktop/tui') {
       return Promise.resolve(ctx.readJson().catch(() => ({}))).then((b) =>
         S.startTui(b).then((r) => S.json(200, r))
@@ -683,13 +832,23 @@ module.exports = {
     }
     if (req.method === 'PUT' && p === API + '/desktop/theme') {
       return Promise.resolve(ctx.readJson().catch(() => ({}))).then((b) => {
-        try { return S.json(200, S.setTheme(b)); } catch (e) { return S.err(422, e.message); }
+        try {
+          const r = S.setTheme(b);
+          // 广播给所有应用：它们订阅 host.theme 才能跟着换肤。
+          // 不 await —— 主题切换不该等一轮 HTTP 往返才返回。
+          S.publishTheme();
+          return S.json(200, r);
+        } catch (e) { return S.err(422, e.message); }
       });
     }
     /* 外观与显示 */
     if (req.method === 'PUT' && p === API + '/desktop/accent') {
       return Promise.resolve(ctx.readJson().catch(() => ({}))).then((b) => {
-        try { return S.json(200, S.setAccent(b)); } catch (e) { return S.err(422, e.message); }
+        try {
+          const r = S.setAccent(b);
+          S.publishTheme();
+          return S.json(200, r);
+        } catch (e) { return S.err(422, e.message); }
       });
     }
     if (req.method === 'PUT' && p === API + '/desktop/display') {
