@@ -312,6 +312,38 @@
     var s = appState(app);
     return s === 'running' || s === 'restarting' || app.type === 'web';
   }
+
+  /**
+   * 等应用端口真的能连上。
+   *
+   * 为什么需要它：内核的 start 已经会等端口 listen 才返回，但仍有两种
+   * 情况会连不上：
+   *   1. 应用是**已经在跑**的（状态 running），但进程刚好在重启的间隙；
+   *   2. 内核等待超时（应用启动慢），返回时端口还没开。
+   * 这时如果直接把 iframe 指过去，浏览器就显示「拒绝了连接」——
+   * 那是最难看的失败方式：用户看到一个浏览器的报错页，而不是应用。
+   *
+   * 怎么探活：走内核的 /runx/apps/:name/ping，而不是直接 fetch 应用端口。
+   * 因为桌面在 location.origin、应用在 host:port，跨源；浏览器从桌面
+   * 直接 fetch 应用会被 CORS 拦掉（应用没发 CORS 头），探活会永远失败。
+   * 内核是同源的，它去连应用不受 CORS 约束。
+   */
+  function waitAppAlive(app, attempts) {
+    if (!app || app.type !== 'node' || !app.port) return Promise.resolve(true);
+    var tries = attempts === undefined ? 12 : attempts;
+    if (tries <= 0) return Promise.resolve(false);
+
+    return api('/apps/' + encodeURIComponent(app.name) + '/ping')
+      .then(function (r) { return !!(r && r.alive); })
+      .catch(function () { return false; })
+      .then(function (alive) {
+        if (alive) return true;
+        // 没活 → 退避后重试（100ms、200ms、300ms…最多 1.2s）
+        return new Promise(function (r) {
+          setTimeout(r, Math.min(1200, (12 - tries + 1) * 100));
+        }).then(function () { return waitAppAlive(app, tries - 1); });
+      });
+  }
   function winId(name) { return 'win-' + name; }
 
   /* ═══════════════════════════════════════════════════════════════════
@@ -1886,12 +1918,22 @@
       veilHint.textContent = '正在启动应用…';
       api('/apps/' + encodeURIComponent(name) + '/start', { method: 'POST' })
         .then(function () { return refreshApps(); })
+        .then(function () { return waitAppAlive(app, 0); })
         .then(function () { iframe.src = appOrigin(app); })
         .catch(function (e) {
           veilHint.textContent = '启动失败：' + e.message + '（可以点工具栏的刷新重试）';
         });
     } else {
-      iframe.src = appOrigin(app);
+      // 已经在跑（或 web 应用）。也探一次活：进程可能刚好在重启的间隙，
+      // 端口没开就直接连，一样是「拒绝了连接」。
+      if (app.type === 'node') {
+        waitAppAlive(app, 0).then(function (alive) {
+          if (!alive) veilHint.textContent = '应用还在启动，正在重试…';
+          iframe.src = appOrigin(app);
+        });
+      } else {
+        iframe.src = appOrigin(app);
+      }
     }
 
     var recNew = {

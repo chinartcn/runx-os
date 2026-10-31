@@ -331,6 +331,34 @@ button { font-family: inherit; }
 }
 
 .rxst-actions { display: flex; gap: 9px; margin-top: 18px; }
+
+/* 分段控件（登录 / 注册 切换）。
+   两个按钮共享一个凹槽底，选中的那一个浮起来 —— 和系统其它分段控件一致。 */
+.rxst-seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--rxst-surface-2);
+  border: 1px solid var(--rxst-line);
+}
+.rxst-seg button {
+  padding: 7px 18px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--rxst-text-2);
+  font-size: 13px;
+  font-weight: 560;
+  cursor: pointer;
+}
+.rxst-seg button:hover { color: var(--rxst-text); }
+.rxst-seg button.on {
+  background: var(--rxst-surface);
+  color: var(--rxst-text);
+  box-shadow: 0 1px 3px rgba(16, 22, 38, 0.12);
+}
+
 .rxst-btn {
   flex: 1;
   padding: 11px 16px;

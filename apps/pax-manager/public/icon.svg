@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#34d399"/>
+      <stop offset="1" stop-color="#059669"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#g)"/>
+  <!-- 立方体：一个包 -->
+  <path d="M32 13.5 51 23.2v19.6L32 52.5 13 42.8V23.2L32 13.5Z" fill="#fff" opacity=".95"/>
+  <!-- 顶面与三条棱：让立方体有体积感 -->
+  <path d="M32 13.5 51 23.2 32 32.9 13 23.2 32 13.5Z" fill="#fff"/>
+  <path d="M32 32.9V52.5" stroke="#059669" stroke-width="2.2" stroke-linecap="round" opacity=".55"/>
+  <path d="M22.5 18.4 41.5 28.1" stroke="#059669" stroke-width="2.2" stroke-linecap="round" opacity=".4"/>
+</svg>

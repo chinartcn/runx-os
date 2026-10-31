@@ -64,7 +64,8 @@ cat > "$ROOT/var/runx/desktop.json" <<'EOF'
   "grid": { "cell": 96, "gap": 8 },
   "icons": [
     { "id": "term", "app": "term", "x": 1, "y": 1, "label": "终端" },
-    { "id": "store", "app": "store", "x": 2, "y": 1, "label": "应用商店" }
+    { "id": "store", "app": "store", "x": 2, "y": 1, "label": "应用商店" },
+    { "id": "pax-manager", "app": "pax-manager", "x": 3, "y": 1, "label": "包管理器" }
   ],
   "widgets": [],
   "taskbar": { "position": "bottom", "pinned": [], "show_clock": true },

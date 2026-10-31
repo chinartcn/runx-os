@@ -217,6 +217,32 @@ button, input, select, textarea { font-family: inherit; }
 
 .rxd-row { display: flex; gap: 7px; margin-top: 9px; flex-wrap: wrap; }
 
+/* 分段控件（登录 / 注册 切换）：两个按钮共享一个凹槽底，选中的浮起来。 */
+.rxd-seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--rxd-bg);
+  border: 1px solid var(--rxd-line);
+}
+.rxd-seg button {
+  padding: 7px 18px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--rxd-text-2);
+  font-size: 13px;
+  font-weight: 560;
+  cursor: pointer;
+}
+.rxd-seg button:hover { color: var(--rxd-text); }
+.rxd-seg button.on {
+  background: var(--rxd-surface);
+  color: var(--rxd-text);
+  box-shadow: 0 1px 3px rgba(16, 22, 38, 0.12);
+}
+
 .rxd-btn {
   padding: 10px 16px;
   border: 0;

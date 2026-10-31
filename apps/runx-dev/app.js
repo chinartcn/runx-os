@@ -405,6 +405,30 @@ async function api(req, res, url) {
   if (p === '/api/dev/session' && req.method === 'GET') {
     return json(res, 200, { ok: true, session: readSession() });
   }
+  if (p === '/api/dev/register' && req.method === 'POST') {
+    const b = await readJson(req);
+    const name = String(b.name || '').trim().toLowerCase();
+    const password = String(b.password || '');
+    if (!/^[a-z0-9_.-]{3,32}$/.test(name)) {
+      return fail(res, 400, 'bad_name', '用户名只能是小写字母、数字、_ . -，3 到 32 位');
+    }
+    if (password.length < 8) {
+      return fail(res, 400, 'weak_password', '密码至少 8 位');
+    }
+    try {
+      const r = await fetch(API_BASE + '/api/user/register', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name, password }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) return fail(res, r.status, d.code || 'EREGISTER', d.message || '注册失败');
+      writeSession({ token: d.token, name: d.name || name, at: Date.now() });
+      return json(res, 200, { ok: true, user: { name: d.name || name } });
+    } catch (e) {
+      return fail(res, 502, 'ESTORE', '商店不可达：' + String(e && e.message || e));
+    }
+  }
   if (p === '/api/dev/login' && req.method === 'POST') {
     const b = await readJson(req);
     try {

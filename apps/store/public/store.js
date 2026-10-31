@@ -296,26 +296,61 @@
   function renderDev(session) {
     var body = $('devBody');
     if (!session || !session.token) {
+      // 登录 / 注册 两个模式共用一个表单 —— 字段几乎一样（用户名 + 密码），
+      // 差别只在「密码要不要再输一遍」和「调哪个接口」。
       body.innerHTML =
-        '<div class="rxst-field"><label>开发者账号</label>'
-        + '<input id="devName" placeholder="用户名" autocomplete="username"></div>'
+        '<div class="rxst-seg" id="devMode">'
+        + '<button class="on" data-mode="login">登录</button>'
+        + '<button data-mode="register">注册</button>'
+        + '</div>'
+        + '<div class="rxst-field" style="margin-top:14px"><label>开发者账号</label>'
+        + '<input id="devName" placeholder="用户名（小写字母、数字、_ . -）" autocomplete="username"></div>'
         + '<div class="rxst-field"><label>密码</label>'
         + '<input id="devPass" type="password" placeholder="密码" autocomplete="current-password"></div>'
-        + '<button class="rxst-btn" id="devLogin">登录</button>'
-        + '<p class="rxst-hint">登录后可以把自己的应用同步到商店。'
+        + '<div class="rxst-field" id="devConfirmWrap" hidden><label>确认密码</label>'
+        + '<input id="devPass2" type="password" placeholder="再输一遍" autocomplete="new-password"></div>'
+        + '<button class="rxst-btn" id="devSubmit">登录</button>'
+        + '<p class="rxst-hint" id="devTip">登录后可以把自己的应用同步到商店。'
         + '上架只需一份 meta.json —— 商店沿用 appex.json 的字段，你不用学第二套格式。</p>'
         + '<div id="devAfter"></div>';
-      $('devLogin').addEventListener('click', function () {
+
+      var mode = 'login';
+      var seg = $('devMode');
+      var confirmWrap = $('devConfirmWrap');
+      var submit = $('devSubmit');
+      var tip = $('devTip');
+
+      seg.addEventListener('click', function (e) {
+        var b = e.target.closest('button[data-mode]');
+        if (!b) return;
+        mode = b.getAttribute('data-mode');
+        var kids = seg.querySelectorAll('button');
+        for (var i = 0; i < kids.length; i++) {
+          kids[i].classList.toggle('on', kids[i].getAttribute('data-mode') === mode);
+        }
+        confirmWrap.hidden = mode !== 'register';
+        submit.textContent = mode === 'register' ? '注册并登录' : '登录';
+        $('devPass').setAttribute('autocomplete', mode === 'register' ? 'new-password' : 'current-password');
+        tip.textContent = mode === 'register'
+          ? '注册即登录 —— 账号只有用户名和密码，商店不收邮箱。密码至少 8 位。'
+          : '登录后可以把自己的应用同步到商店。上架只需一份 meta.json —— 商店沿用 appex.json 的字段，你不用学第二套格式。';
+      });
+
+      submit.addEventListener('click', function () {
         var n = $('devName').value.trim();
         var p = $('devPass').value;
         if (!n || !p) { toast('用户名和密码都要填', true); return; }
-        $('devLogin').disabled = true;
-        local('/api/dev/login', { name: n, password: p }).then(function () {
-          toast('已登录');
+        if (mode === 'register') {
+          if (p.length < 8) { toast('密码至少 8 位', true); return; }
+          if (p !== $('devPass2').value) { toast('两次密码不一致', true); return; }
+        }
+        submit.disabled = true;
+        local('/api/dev/' + mode, { name: n, password: p }).then(function () {
+          toast(mode === 'register' ? '注册成功，已登录' : '已登录');
           return openDev();
         }).catch(function (e) {
-          toast(e.message || '登录失败', true);
-          $('devLogin').disabled = false;
+          toast(e.message || (mode === 'register' ? '注册失败' : '登录失败'), true);
+          submit.disabled = false;
         });
       });
       return;

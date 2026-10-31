@@ -49,7 +49,7 @@ trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/$WORKDIR"
 
 # 复制示例应用（保持结构：appex.json / meta.json / app.js / public/ ...）
-for app in demo; do
+for app in demo pax-manager; do
   src="$ROOT/apps/$app"
   [ -d "$src" ] || { echo "✗ 找不到 $src" >&2; exit 1; }
   cp -R "$src" "$TMP/$WORKDIR/$app"
@@ -65,6 +65,7 @@ cat > "$TMP/README.md" <<EOF
 每个子目录是一个可直接安装的应用：
 
 - \`$WORKDIR/demo\` —— 文件授权 / 监听 / 流式读取 / 进程 / 剪贴板 / @runx-ui 组件库
+- \`$WORKDIR/pax-manager\` —— PaX 包管理器：装 / 卸 / 更新本机应用
 
 商店安装时按 \`subdir: $WORKDIR/<应用名>\` 定位包内应用。
 EOF

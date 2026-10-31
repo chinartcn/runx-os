@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>包管理器 · RunX</title>
+<!-- 组件库由内核提供（@runx-ui 扩展）。地址在服务端渲染时替换成真实网关。 -->
+<link rel="stylesheet" href="__GATEWAY__/runx/ui/runx-ui.css">
+<style>
+  /* 底色交给组件库：.rx 的 background 是 var(--rx-canvas)，跟桌面窗口
+     内容区（--canvas）同一个值 —— 应用在窗口里与窗口外是一块连续的画布。 */
+  html { margin: 0; height: 100%; }
+  body.rx { margin: 0; min-height: 100vh; display: flex; flex-direction: column; }
+
+  .top { display: flex; align-items: center; gap: 10px; padding: 12px 16px 0; }
+  .top .grow { flex: 1; min-width: 0; }
+  .top h1 { font: var(--rx-font-subtitle); margin: 0; letter-spacing: var(--rx-tracking-title); }
+  .top .path { font: 11px/1.4 var(--rx-font-mono); color: var(--rx-label-tertiary); }
+
+  .toolbar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 16px 0; flex-wrap: wrap;
+  }
+  .toolbar .search { flex: 1; min-width: 160px; }
+
+  .body { flex: 1; overflow: auto; padding: 14px 16px 24px; }
+  .stack { display: flex; flex-direction: column; gap: 12px; max-width: 860px; margin: 0 auto; }
+
+  /* 应用行 */
+  .pkg { display: flex; align-items: center; gap: 12px; padding: 12px 4px; }
+  .pkg + .pkg { box-shadow: inset 0 0.5px 0 var(--rx-hairline); }
+  .pkg .icon {
+    width: 34px; height: 34px; border-radius: 9px; flex: none;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--rx-accent-soft); color: var(--rx-accent);
+    font: var(--rx-font-title);
+  }
+  .pkg .main { flex: 1; min-width: 0; }
+  .pkg .name {
+    font: var(--rx-font-body); font-weight: 600;
+    display: flex; align-items: center; gap: 7px;
+  }
+  .pkg .name .ver { font: var(--rx-font-caption); color: var(--rx-label-tertiary); font-weight: 400; }
+  .pkg .desc {
+    font: var(--rx-font-caption); color: var(--rx-label-secondary);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .pkg .acts { display: flex; gap: 6px; flex: none; flex-wrap: wrap; justify-content: flex-end; }
+
+  /* 状态点 */
+  .dot { width: 7px; height: 7px; border-radius: 999px; background: var(--rx-label-quaternary); flex: none; }
+  .dot.on { background: var(--rx-semantic-green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--rx-semantic-green) 18%, transparent); }
+  .dot.warn { background: var(--rx-semantic-yellow); }
+  .dot.err { background: var(--rx-semantic-red); }
+
+  .err { font: var(--rx-font-caption); color: var(--rx-semantic-red); margin: 8px 0 0; }
+  .hint { font: var(--rx-font-caption); color: var(--rx-label-tertiary); margin: 8px 0 0; }
+
+  /* 权限清单 */
+  .perms { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+  .perm {
+    font: 11px/1.5 var(--rx-font-mono);
+    padding: 2px 7px; border-radius: 6px;
+    background: var(--rx-surface-hover); color: var(--rx-label-secondary);
+  }
+  .perm.risky { background: color-mix(in srgb, var(--rx-semantic-yellow) 16%, transparent); color: var(--rx-semantic-yellow); }
+
+  .kv { display: grid; grid-template-columns: 92px 1fr; gap: 4px 10px; font: var(--rx-font-caption); }
+  .kv dt { color: var(--rx-label-tertiary); }
+  .kv dd { margin: 0; color: var(--rx-label-primary); font-variant-numeric: tabular-nums; word-break: break-all; }
+
+  .log {
+    max-height: 200px; overflow: auto;
+    font: 11.5px/1.6 var(--rx-font-mono);
+    background: var(--rx-surface-sunken); border-radius: var(--rx-radius-field);
+    padding: 8px 10px;
+  }
+  .log div { padding: 1px 0; border-bottom: 0.5px solid var(--rx-hairline); word-break: break-all; }
+
+  .toast-host {
+    position: fixed; right: 16px; bottom: 16px; z-index: 40;
+    display: flex; flex-direction: column; gap: 8px; align-items: flex-end;
+  }
+  .toast {
+    padding: 9px 14px; border-radius: 10px; max-width: 340px;
+    background: var(--rx-surface); border: 1px solid var(--rx-hairline);
+    box-shadow: var(--rx-shadow-panel); font: var(--rx-font-caption);
+    animation: toast-in .18s var(--rx-ease-out);
+  }
+  .toast.err { color: var(--rx-semantic-red); }
+  @keyframes toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+  .busy { display: flex; align-items: center; gap: 8px; }
+</style>
+</head>
+<body class="rx" data-theme="auto">
+
+<div class="top">
+  <h1>包管理器</h1>
+  <span class="grow"></span>
+  <span class="rx-badge" id="badge-count">—</span>
+</div>
+<div class="path" style="padding:0 16px">__ROOT__</div>
+
+<div class="toolbar">
+  <div class="rx-search search">
+    <input class="rx-input" id="q" placeholder="搜应用名 / 描述" style="width:100%">
+  </div>
+  <button class="rx-btn" id="btn-install">安装…</button>
+  <button class="rx-btn" id="btn-refresh">刷新</button>
+</div>
+
+<div class="body">
+  <div class="stack">
+
+    <!-- ── 安装 ── -->
+    <section class="rx-card" id="card-install" hidden>
+      <div class="card-head" style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+        <span class="rx-title" style="flex:1">安装应用</span>
+        <button class="rx-icon-btn" id="install-close" aria-label="关闭">×</button>
+      </div>
+      <div class="rx-field">
+        <label class="rx-caption" for="in-url">下载地址</label>
+        <input class="rx-input" id="in-url" placeholder="https://github.com/…/archive/refs/heads/main.tar.gz" style="width:100%">
+      </div>
+      <div class="rx-field">
+        <label class="rx-caption" for="in-subdir">包内目录（可选）</label>
+        <input class="rx-input" id="in-subdir" placeholder="apps/demo —— 仓库归档里应用本体所在的位置" style="width:100%">
+      </div>
+      <p class="rx-caption">不给目录的话，内核会自己探测包里的应用。填错了会报「包里找不到应用」。</p>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="rx-btn primary" id="in-go">装上</button>
+        <button class="rx-btn" id="in-local">用本地目录…</button>
+      </div>
+      <p class="err" id="install-err" style="display:none"></p>
+    </section>
+
+    <!-- ── 列表 ── -->
+    <section class="rx-card">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+        <span class="rx-title" style="flex:1">本机应用</span>
+      </div>
+      <div id="list"></div>
+      <p class="err" id="list-err" style="display:none"></p>
+    </section>
+
+    <!-- ── 详情 ── -->
+    <section class="rx-card" id="card-detail" hidden>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+        <span class="rx-title" style="flex:1" id="detail-title">详情</span>
+        <button class="rx-icon-btn" id="detail-close" aria-label="关闭">×</button>
+      </div>
+      <dl class="kv" id="detail-kv"></dl>
+      <div id="detail-perms"></div>
+      <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+        <button class="rx-btn sm" id="d-logs">看日志</button>
+        <button class="rx-btn sm" id="d-update">更新…</button>
+        <button class="rx-btn sm destructive" id="d-uninstall">卸载</button>
+      </div>
+      <div class="log" id="detail-log" style="display:none;margin-top:10px"></div>
+      <p class="err" id="detail-err" style="display:none"></p>
+    </section>
+
+  </div>
+</div>
+
+<div class="toast-host" id="toasts"></div>
+
+<script src="__GATEWAY__/runx/ui/runx-ui.js"></script>
+<script src="pax.js"></script>
+</body>
+</html>

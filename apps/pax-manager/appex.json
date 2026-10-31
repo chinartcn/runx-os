@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "name": "pax-manager",
+  "version": "1.0.0",
+  "type": "node",
+  "entry": "app.js",
+  "port": 3482,
+  "display_name": "包管理器",
+  "icon": "public/icon.svg",
+  "description": "PaX 包管理器：装、卸、更新本机应用。列清单、看状态、管权限 —— 都走内核 PaX 的安全通道。",
+  "restart": "on-failure",
+  "restart_delay_ms": 1000,
+  "restart_max": 3,
+  "restart_window_ms": 60000,
+  "autostart": false,
+  "data_dir": "data",
+  "permissions": [
+    "fs.read:../**"
+  ]
+}

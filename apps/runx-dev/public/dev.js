@@ -210,23 +210,60 @@
     var box = $('acctBody');
     var s = state.session;
     if (!s || !s.token) {
+      // 登录 / 注册 切换：字段一样，只有提交时调的接口不同。
       box.innerHTML =
-        '<div class="rxd-field"><label>开发者账号</label>'
-        + '<input id="accName" class="rxd-input" placeholder="用户名" autocomplete="username"></div>'
+        '<div class="rxd-seg" id="accMode">'
+        + '<button class="on" data-mode="login">登录</button>'
+        + '<button data-mode="register">注册</button>'
+        + '</div>'
+        + '<div class="rxd-field" style="margin-top:14px"><label>开发者账号</label>'
+        + '<input id="accName" class="rxd-input" placeholder="用户名（小写字母、数字、_ . -）" autocomplete="username"></div>'
         + '<div class="rxd-field"><label>密码</label>'
         + '<input id="accPass" class="rxd-input" type="password" placeholder="密码" autocomplete="current-password"></div>'
-        + '<button class="rxd-btn" id="accLogin">登录</button>'
-        + '<p class="rxd-hint">没有账号？先在商店那边注册一个，或者用终端：'
-        + '<code>node .js/@runx-rights-manager/cli.js</code></p>';
-      $('accLogin').addEventListener('click', function () {
+        + '<div class="rxd-field" id="accConfirmWrap" hidden><label>确认密码</label>'
+        + '<input id="accPass2" class="rxd-input" type="password" placeholder="再输一遍" autocomplete="new-password"></div>'
+        + '<button class="rxd-btn" id="accSubmit">登录</button>'
+        + '<p class="rxd-hint" id="accTip">没有账号？切到「注册」开一个 —— 只要用户名和密码，商店不收邮箱。</p>';
+
+      var mode = 'login';
+      var seg = $('accMode');
+      var confirmWrap = $('accConfirmWrap');
+      var submit = $('accSubmit');
+      var tip = $('accTip');
+
+      seg.addEventListener('click', function (e) {
+        var b = e.target.closest('button[data-mode]');
+        if (!b) return;
+        mode = b.getAttribute('data-mode');
+        var kids = seg.querySelectorAll('button');
+        for (var i = 0; i < kids.length; i++) {
+          kids[i].classList.toggle('on', kids[i].getAttribute('data-mode') === mode);
+        }
+        confirmWrap.hidden = mode !== 'register';
+        submit.textContent = mode === 'register' ? '注册并登录' : '登录';
+        $('accPass').setAttribute('autocomplete', mode === 'register' ? 'new-password' : 'current-password');
+        tip.textContent = mode === 'register'
+          ? '注册即登录 —— 密码至少 8 位，注册后立刻就能上架。'
+          : '没有账号？切到「注册」开一个 —— 只要用户名和密码，商店不收邮箱。';
+      });
+
+      submit.addEventListener('click', function () {
         var n = $('accName').value.trim();
         var p = $('accPass').value;
         if (!n || !p) { toast('用户名和密码都要填', true); return; }
-        api('/api/dev/login', { name: n, password: p }).then(function () {
-          toast('已登录');
+        if (mode === 'register') {
+          if (p.length < 8) { toast('密码至少 8 位', true); return; }
+          if (p !== $('accPass2').value) { toast('两次密码不一致', true); return; }
+        }
+        submit.disabled = true;
+        api('/api/dev/' + mode, { name: n, password: p }).then(function () {
+          toast(mode === 'register' ? '注册成功，已登录' : '已登录');
           refreshSession();
           loadMyApps();
-        }).catch(function (e) { toast(e.message || '登录失败', true); });
+        }).catch(function (e) {
+          toast(e.message || (mode === 'register' ? '注册失败' : '登录失败'), true);
+          submit.disabled = false;
+        });
       });
       return;
     }

@@ -17,6 +17,7 @@
 const API = '/runx';
 const crypto = require('crypto');
 const path = require('path');
+const net = require('net');
 
 /**
  * 给每个应用一个长期 token。
@@ -87,6 +88,59 @@ function recordOwner(name, uid) {
 const runtime = new Map();
 // 模块级单例（扩展在进程内只加载一次），onInit 填充，onRequest 直接取用
 let S = null;
+
+/**
+ * 探测一个端口是否已经在 listen。
+ *
+ * 为什么需要它：spawn 返回时，进程只是**被 fork 出来了**——它还没跑到
+ * `server.listen()`。桌面拿到 200 就把 iframe 的 src 指到那个端口，
+ * 浏览器立刻去连 → 端口没开 → Chrome 显示「拒绝了连接」。
+ * 这个竞态在冷启动（第一次点图标）时几乎必现。
+ *
+ * 做法：用 TCP 连一下。连得上 = 内核已经 accept = 应用在听。
+ * 连不上（ECONNREFUSED）= 还没 listen，继续等。
+ */
+function probePort(port, host, timeoutMs) {
+  return new Promise((resolve) => {
+    if (!port) return resolve(false);
+    const sock = new net.Socket();
+    let settled = false;
+    const done = (ok) => {
+      if (settled) return;
+      settled = true;
+      try { sock.destroy(); } catch { /* 忽略 */ }
+      resolve(ok);
+    };
+    sock.setTimeout(timeoutMs || 500);
+    sock.once('connect', () => done(true));
+    sock.once('timeout', () => done(false));
+    sock.once('error', () => done(false));
+    try {
+      sock.connect(port, host || '127.0.0.1');
+    } catch { done(false); }
+  });
+}
+
+/**
+ * 等端口真正 listen。
+ *
+ * 为什么要轮询而不是等一次：Node 进程从 fork 到 listen 之间有一小段
+ * 启动期（几百毫秒量级，重的应用更久）。这里以 100ms 为间隔轮询，
+ * 直到连上或超时。
+ *
+ * 超时了也别当成失败 —— 有些应用**本来就不监听端口**（纯 CLI 型应用、
+ * 或者设计上只写文件）。那种情况探测永远失败，但启动本身是成功的。
+ * 所以返回的 ready 只表示「端口就绪了没有」，start 仍然算成功。
+ */
+async function waitForPort(port, host, timeoutMs) {
+  if (!port) return false;
+  const deadline = Date.now() + (timeoutMs || 10000);
+  while (Date.now() < deadline) {
+    if (await probePort(port, host)) return true;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  return false;
+}
 
 module.exports = {
 
@@ -377,7 +431,7 @@ module.exports = {
     if (timer.unref) timer.unref();
   },
 
-  onRequest(req, url, ctx) {
+  async onRequest(req, url, ctx) {
     const p = url.pathname;
     if (!p.startsWith(API + '/apps') || !S) return undefined;
     const method = req.method;
@@ -408,6 +462,20 @@ module.exports = {
       return S.json(200, S.logsOf(name, lines));
     }
 
+    // GET /runx/apps/:name/ping —— 探活（桌面用来等端口就绪）
+    //
+    // 为什么由内核代劳：桌面页面在 location.origin，应用在 host:port ——
+    // 两者跨源。浏览器从桌面直接 fetch 应用端口会被 CORS 拦掉（应用没发
+    // Access-Control-Allow-Origin），探活会永远失败。内核是同源的，它去
+    // 连应用不受 CORS 约束。
+    if (method === 'GET' && action === 'ping') {
+      const entry = S.getEntry(name);
+      if (!entry) return S.err(404, '应用不存在');
+      if (entry.type !== 'node' || !entry.port) return S.json(200, { ok: true, alive: true, port: 0 });
+      const alive = await probePort(entry.port, '127.0.0.1', 800);
+      return S.json(200, { ok: true, alive: alive, port: entry.port });
+    }
+
     // POST /runx/apps/:name/start
     if (method === 'POST' && action === 'start') {
       const entry = S.getEntry(name);
@@ -419,7 +487,30 @@ module.exports = {
       if (r.error === 'cwd_missing') return S.err(422, 'cwd 不存在', { cwd: r.cwd });
       if (r.error === 'port_in_use') return S.err(409, '端口被占用', { port: r.port });
       const rt = runtime.get(name);
-      return S.json(200, { pid: rt ? rt.pid : null, port: entry.port, started_at: rt ? rt.started_at : null });
+
+      // 等端口真的 listen 再返回。
+      //
+      // 为什么：不等的话，桌面拿到响应就把 iframe 指过去，而此时进程还没
+      // listen —— 浏览器直接「拒绝了连接」。等到位再返回，桌面就能一次
+      // 连上，不用靠重试碰运气。
+      //
+      // web 应用没有端口，直接就绪。
+      //
+      // 超时上限 4000ms：内核给扩展 onRequest 钩子的总预算是 5000ms，
+      // 超了内核会报 EXT_TIMEOUT 并返回 500 —— 那比"端口没就绪"糟得多。
+      // 这里宁可提前放弃（ready=false，前端继续探活重试），也不能拖垮内核。
+      const ready = entry.type === 'web'
+        ? true
+        : await waitForPort(entry.port, '127.0.0.1', 4000);
+
+      return S.json(200, {
+        pid: rt ? rt.pid : null,
+        port: entry.port,
+        started_at: rt ? rt.started_at : null,
+        // ready=false 表示进程起来了但端口还没通（应用自己没监听端口，
+        // 或者启动慢到超时）。前端据此决定是直接连还是先探活。
+        ready: ready,
+      });
     }
 
     // POST /runx/apps/:name/stop

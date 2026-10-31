@@ -1,0 +1,25 @@
+{
+  "name": "pax-manager",
+  "slug": "pax-manager",
+  "version": "1.0.0",
+  "display_name": "包管理器",
+  "summary": "PaX 包管理器：装、卸、更新本机应用，查看清单、状态与权限。",
+  "description": "RunX 的 PaX 是内核里的包管理扩展，一直只有 API、没有界面。\n\n这个应用就是那个 API 的图形外壳 —— 装包、解包、落盘、更新、卸载全部走内核的安全通道，这个进程自己一行文件系统写操作都没有。\n\n它管的是「本机」：看装了什么、装本地的包、更新已有应用、卸载不要的应用。面向普通用户的浏览与一键安装在「应用商店」里，两者调的是同一套内核 API。",
+  "category": "utility",
+  "author": "runx",
+  "homepage": "https://github.com/chinartcn/runx-examples",
+  "repo": "https://github.com/chinartcn/runx-examples",
+  "license": "MIT",
+  "icon": "https://raw.githubusercontent.com/chinartcn/runx-examples/main/apps/pax-manager/public/icon.svg",
+  "permissions": [
+    "fs.read:../**"
+  ],
+  "sha256": "",
+  "size": 4194304,
+  "source": {
+    "type": "github",
+    "url": "https://github.com/chinartcn/runx-examples",
+    "download": "https://github.com/chinartcn/runx-examples/archive/refs/heads/main.tar.gz",
+    "subdir": "apps/pax-manager"
+  }
+}
