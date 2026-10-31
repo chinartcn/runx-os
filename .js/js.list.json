@@ -6,5 +6,6 @@
   "@runx-desktop",
   "@runx-monitor",
   "@runx-files",
-  "@runx-settings"
+  "@runx-settings",
+  "@runx-x11"
 ]

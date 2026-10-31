@@ -268,9 +268,22 @@
   /* ═══════════════════════════════════════════════════════════════════
    * 应用信息
    * ═══════════════════════════════════════════════════════════════════ */
+  /**
+   * 伪应用：桌面上有些窗口不对应一个装好的应用，但窗口管理器需要一份「应用
+   * 记录」来取标题、图标、端口。x11 就是这样一个 —— 显示会话是桌面自己起的，
+   * 没有 apps.json 条目，端口一号一会话。
+   */
+  var PSEUDO_APPS = {
+    x11: { name: 'x11', type: 'node', display_name: '图形应用', port: 0, pseudo: true },
+  };
   function appOf(name) {
     for (var i = 0; i < apps.length; i++) if (apps[i].name === name) return apps[i];
-    return null;
+    return PSEUDO_APPS[name] || null;
+  }
+  /** 窗口内容的 origin：x11 会话自己带一个（端口由会话决定），其余走应用端口 */
+  function originOf(rec) {
+    if (!rec) return '';
+    return rec.origin || appOrigin(rec.app);
   }
   function appTitle(app) {
     return (app && (app.display_name || app.name)) || '应用';
@@ -695,6 +708,7 @@
   /** 图标双击 / 回车 / 「运行」的统一入口：带命令就跑命令，否则开应用 */
   function openIcon(ic) {
     if (!ic) return;
+    if (ic.command && ic.x11) return openX11(ic);
     if (ic.command) return openTui(ic);
     openApp(ic.app);
   }
@@ -756,7 +770,70 @@
   }
 
   /**
-   * 窗口里的页面请求桌面做点事。目前只有「关掉我自己」。
+   * 开一个 X11 图形会话（一个窗口 = 一个 seamless 会话）。
+   *
+   * 与 TUI 的差别：地址不是「应用端口 + 会话参数」，而是**这次会话自己的端口**。
+   * xpra 在那边既发 HTML5 客户端也跑协议，所以这里只需要拼 http://<当前主机>:<端口>。
+   * 主机名必须用浏览器的 location.hostname —— 手机走局域网访问时，服务端写死的
+   * 127.0.0.1 指的是手机自己。
+   */
+  function openX11(ic) {
+    var id = 'x11-' + ic.id;
+    var label = ic.label || ic.command;
+    var X = window.RunXX11;
+
+    // 没装 @runx-x11 扩展：图标还在（它只是 desktop.json 里的一个字段），
+    // 但没人能起会话。说清楚缺什么，别让用户以为是自己命令写错了。
+    if (!X) {
+      showToast('图形应用需要 @runx-x11 扩展，当前没有加载');
+      return;
+    }
+
+    if (windows[id]) closeWindow(id, false);   // 旧会话一律重建：状态已经不可信
+
+    // ensure() 负责「能用吗 / 不能用怎么办」：探测、弹方案、等用户装完重试。
+    // 桌面不关心 xpra 装在哪，只关心最后能不能拿到一个端口。
+    X.ensure().then(function (ok) {
+      if (!ok) return null;
+      return X.create(ic);
+    }).then(function (r) {
+      if (!r) return;
+      openX11Window(ic, r, label);
+    }).catch(function (e) {
+      showToast('「' + label + '」没能启动：' + e.message);
+    });
+  }
+
+  function openX11Window(ic, r, label) {
+    var origin = 'http://' + location.hostname + ':' + r.port + (r.path || '/');
+    var wa = workArea();
+    // 图形应用是「一块画布」，给得比终端更宽：终端按字符格排版，图形应用按像素
+    var w = narrow() ? wa.w : Math.min(1024, Math.max(560, Math.round(wa.w * 0.78)));
+    var h = narrow() ? Math.round(wa.h * 0.72) : Math.min(720, Math.max(400, Math.round(wa.h * 0.78)));
+
+    openApp('x11', {
+      winId: 'x11-' + ic.id,
+      src: origin,
+      origin: origin,
+      session: r.id,
+      tint: '#021d3a',          // xpra HTML5 客户端的画布底色，和窗口背景对齐
+      title: label,
+      subtitle: 'x11 · :' + r.display,
+      subtitleBase: 'x11 · :' + r.display,
+      icon: ic.icon || '🖥',
+      transient: true,
+      silent: true,
+      pseudo: true,
+      geom: {
+        x: Math.round((wa.w - w) / 2),
+        y: Math.round(Math.max(8, (wa.h - h) / 2.8)),
+        w: w, h: h,
+      },
+    });
+  }
+
+  /**
+   * 窗口里的页面请求桌面做点事：关掉我自己、或者「我这边的进程结束了」。
    *
    * 身份不靠消息里自报的名字（那样任何页面都能冒充别的窗口），而是拿
    * event.source 和已知窗口的 iframe.contentWindow 比对 —— 只有真的挂在
@@ -846,6 +923,15 @@
           if (r2 && r2.app && r2.app.name === p.app) r2.badge = p.count || 0;
         }
         renderDock();
+        break;
+      /* 会话在服务端结束了（用户在 xpra 里退了所有程序，或者 xpra 崩了）。
+         窗口留着只会是一句 connection lost，不如关掉并说清楚。 */
+      case 'host.window.close':
+        if (p.winId && windows[p.winId]) {
+          var nm = (windows[p.winId].title && windows[p.winId].title.textContent) || '窗口';
+          closeWindow(p.winId, false);
+          announce(nm + ' 已结束');
+        }
         break;
     }
   }
@@ -941,9 +1027,25 @@
   function promptNewCommand(editing) {
     var cur = (editing && editing.command) ? editing : null;
     var done = null;
+    // 两种模式：终端里跑字符程序，或者在一个独立显示号上跑图形程序
+    var isX11 = !!(cur && cur.x11);
+    var x11ok = true;        // 探测回来之前先按可用处理，避免对话框闪一下
+    var x11hint = '';
 
     var body = el('div');
     body.style.cssText = 'display:grid;gap:12px';
+
+    /* 模式分段控件：一个图标要么是终端命令，要么是图形应用，不能既…又… */
+    var seg = el('div', 'rx-segmented');
+    seg.setAttribute('role', 'tablist');
+    var segTerm = el('button', null, '终端');
+    var segX11 = el('button', null, '图形（X11）');
+    [segTerm, segX11].forEach(function (b) { b.setAttribute('role', 'tab'); seg.appendChild(b); });
+    var segRow = el('div');
+    segRow.style.cssText = 'display:grid;gap:6px';
+    segRow.appendChild(el('div', 'caption', '类型'));
+    segRow.appendChild(seg);
+    body.appendChild(segRow);
 
     var nameIn = mkField(cur ? cur.label : '', '例如：内存');
     var cmdIn = mkField(cur ? cur.command : '', '例如：free -h', true);
@@ -963,10 +1065,57 @@
     shellWrap.appendChild(shellIn);
     shellWrap.appendChild(shellText);
 
+    /* x11 模式的说明与警告：只在选中「图形」时出现 */
+    var x11Note = el('div');
+    x11Note.style.cssText = 'font-size:12px;line-height:1.55;color:var(--label-secondary)';
+    x11Note.innerHTML = '在一个独立的显示号上启动（xpra seamless），同一个窗口里还能再开别的程序。' +
+      '<span style="color:var(--label-tertiary)">命令不经过 shell；要管道就写 ' +
+      '<code>sh -c "…"</code>。</span>';
+    var x11Warn = el('div');
+    x11Warn.style.cssText = 'font-size:12px;line-height:1.55;color:var(--danger)';
+    x11Warn.style.display = 'none';
+
+    var cmdRow = fieldRow('命令', cmdIn, '');
+    cmdRow.appendChild(x11Note);
+    cmdRow.appendChild(x11Warn);
+
     body.appendChild(fieldRow('名称', nameIn, '显示在图标下面；留空则用命令本身'));
-    body.appendChild(fieldRow('命令', cmdIn, '在本机 shell 的工作目录下执行，关窗口即结束进程'));
+    body.appendChild(cmdRow);
     body.appendChild(fieldRow('图标', iconIn, '一个 emoji'));
     body.appendChild(shellWrap);
+
+    function applyMode() {
+      segTerm.setAttribute('aria-selected', isX11 ? 'false' : 'true');
+      segX11.setAttribute('aria-selected', isX11 ? 'true' : 'false');
+      cmdIn.placeholder = isX11 ? '例如：xterm -fa Monospace' : '例如：free -h';
+      shellWrap.style.display = isX11 ? 'none' : '';
+      x11Note.style.display = isX11 ? '' : 'none';
+      x11Warn.style.display = (isX11 && !x11ok) ? '' : 'none';
+      if (isX11 && !x11ok) {
+        x11Warn.textContent = '这台机器上还没有可用的 X11 后端' + (x11hint ? '：' + x11hint : '') +
+          '。图标可以先放着，装好之后就能启动。';
+      }
+      if (isX11 && !iconIn.value.trim()) iconIn.value = '🖥';
+      if (!isX11 && iconIn.value === '🖥') iconIn.value = guessEmoji(cmdIn.value);
+    }
+    segTerm.addEventListener('click', function () { isX11 = false; applyMode(); });
+    segX11.addEventListener('click', function () { isX11 = true; applyMode(); });
+    applyMode();
+
+    // 有没有 X11 后端由 @runx-x11 说了算。没装扩展时 api 会 404，这时仍然允许
+    // 建图标（配置先放着，装了扩展就能用），只是给一行提示。
+    var X = window.RunXX11;
+    if (X) {
+      X.status().then(function (r) {
+        x11ok = !!(r && r.ok);
+        x11hint = (r && r.ok) ? '' : ((r && (r.message || r.hint)) || '');
+        applyMode();
+      }).catch(function () { /* 探测失败就当可用，真起不来会报错 */ });
+    } else {
+      x11ok = false;
+      x11hint = '没有加载 @runx-x11 扩展';
+      applyMode();
+    }
 
     var btns = el('div');
     btns.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;margin-top:2px';
@@ -981,8 +1130,9 @@
       var payload = {
         label: nameIn.value.trim() || cmd.split(/\s+/)[0],
         command: cmd,
-        shell: shellIn.checked,
-        icon: iconIn.value.trim() || guessEmoji(cmd),
+        shell: isX11 ? false : shellIn.checked,
+        x11: isX11,
+        icon: iconIn.value.trim() || (isX11 ? '🖥' : guessEmoji(cmd)),
       };
       var req = cur
         ? api('/desktop/icons/' + encodeURIComponent(cur.id),
@@ -1001,6 +1151,8 @@
     }
 
     cmdIn.addEventListener('input', function () {
+      // 图形应用不猜 emoji：命令是 xterm 还是 gimp，猜出来都不如一个显示器图标清楚
+      if (isX11) return;
       if (!iconIn.value.trim() || iconIn.value === guessEmoji(cur ? cur.command : '')) {
         iconIn.value = guessEmoji(cmdIn.value);
       }
@@ -1013,7 +1165,7 @@
     cancel.addEventListener('click', function () { if (done) done(); });
     ok.addEventListener('click', save);
 
-    done = sheet(cur ? '编辑命令' : '新建终端命令', body, []);
+    done = sheet(cur ? '编辑快捷方式' : '新建快捷方式', body, []);
     setTimeout(function () { (cur ? cmdIn : cmdIn).focus(); }, 30);
   }
 
@@ -1585,6 +1737,9 @@
 
     // 统一夹取：defaultGeom 给的尺寸也走一遍夹取，任何来源的几何都不会越界
     var g = clampGeomToView(opts.geom || defaultGeom(order.length));
+    // 内容来源。默认是应用首页；x11 会话带着自己的一次性地址过来，
+    // 首页/重新加载都得回到那个地址，而不是 http://host:0/
+    var origin = opts.origin || appOrigin(app);
     // 窄屏用紧凑工具栏：手机上垂直空间比「控件好按」更稀缺
     var initialStyle = narrow() ? 'unifiedCompact' : 'unified';
     var w = el('div', 'rx-window rx-material-regular' +
@@ -1621,11 +1776,11 @@
 
     var tools = el('div', 'rx-win-tools');
     var bHome = toolBtn(ICON.home, '回到应用首页', function () {
-      iframe.src = appOrigin(app);
+      iframe.src = origin;
       failCount = 0; veil.classList.remove('hidden'); veilHint.textContent = '正在加载…';
     });
     var bReload = toolBtn(ICON.reload, '重新加载', function () {
-      iframe.src = appOrigin(app);
+      iframe.src = origin;
       failCount = 0; veil.classList.remove('hidden'); veilHint.textContent = '正在加载…';
     });
     // 窗口工具栏样式切换（§3.1：unified / unifiedCompact / expanded）
@@ -1660,6 +1815,10 @@
 
     /* — 内容区 — */
     var body = el('div', 'rx-win-body');
+    // 内容自己的底色。x11 会话的客户端页面是深蓝画布（#021d3a），iframe 加载
+    // 之前露出的是我们的白底，会闪一下；提前对上色，加载过程就是「同一块画布
+    // 慢慢出现内容」。别的应用不开这个参数，维持主题色。
+    if (opts.tint) body.style.background = opts.tint;
     var iframe = el('iframe');
     iframe.setAttribute('allow', 'autoplay; fullscreen; clipboard-read; clipboard-write');
     iframe.setAttribute('referrerpolicy', 'same-origin');
@@ -1714,7 +1873,7 @@
       veil.classList.remove('hidden');
       if (failCount <= 3) {
         setTimeout(function () {
-          if (windows[id] && failCount <= 3) iframe.src = appOrigin(app);
+          if (windows[id] && failCount <= 3) iframe.src = origin;
         }, safeMs(1500 * failCount, 1500, 400, 12000));
       }
     }
@@ -1749,6 +1908,12 @@
       // 所以不进桌面存档（否则启动时冒出一堆连不上会话的死窗口）。
       transient: !!opts.transient,
       icon: opts.icon || null,    // 命令式窗口的 emoji，Dock 用它区分同名应用
+      // x11 会话：内容地址是这一次会话的端口，关窗口要顺手把会话停掉
+      origin: opts.origin || null,
+      session: opts.session || null,
+      // 副标题在拖动/缩放时会被改写成「尺寸」，先记住原来的措辞
+      subtitleBase: opts.subtitleBase || null,
+      pseudo: !!(opts.pseudo || app.pseudo),
     };
     windows[id] = recNew;
     order.push(id);
@@ -2033,6 +2198,10 @@
     syncChrome();
     renderDock(); renderMenus();
     saveWindows();            // 关掉的窗口不该在刷新后复活
+    // X11 会话是「窗口的进程」：窗口没了会话就该结束，否则 xpra 会在后台一直
+    // 跑着占显示号和内存，而用户再也看不到它。native 直通是 singleton，扩展那边
+    // 自己判断要不要真停；这里只管把 id 递过去，失败不打扰用户。
+    if (rec.session && window.RunXX11) window.RunXX11.stop(rec.session);
     if (notify !== false) {
       // 面板窗口没有应用记录，标题从 rec.title 取
       var nm = rec.app ? appTitle(rec.app) : ((rec.title && rec.title.textContent) || '面板');
@@ -2248,9 +2417,11 @@
     // 早先直接读 rec.app.type，缩一下内核面板就抛 TypeError，连后面的
     // saveWindows() 一起被跳过 —— 缩放结果没落盘。
     var size = Math.round(g.w) + ' × ' + Math.round(g.h);
-    rec.subtitle.textContent = (rec.app && rec.app.type === 'node')
-      ? 'node · :' + rec.app.port + ' · ' + size
-      : size;
+    rec.subtitle.textContent = rec.subtitleBase
+      ? rec.subtitleBase + ' · ' + size
+      : ((rec.app && rec.app.type === 'node')
+        ? 'node · :' + rec.app.port + ' · ' + size
+        : size);
   }
 
   function bindGlobal(move, end) {
@@ -2422,19 +2593,20 @@
       { label: '重新加载应用', glyph: 'reload', key: '⌘R', disabled: disabled, act: function () {
           var r = windows[activeId]; if (!r) return;
           r.veilHint.textContent = '正在加载…'; r.veil.classList.remove('hidden');
-          r.iframe.src = appOrigin(r.app);
+          r.iframe.src = originOf(r);
         } },
       { label: '让应用在浏览器新标签打开', glyph: 'external', disabled: disabled, act: function () {
           var r = windows[activeId]; if (!r) return;
-          window.open(appOrigin(r.app), '_blank', 'noopener');
+          window.open(originOf(r), '_blank', 'noopener');
         } },
       { sep: true },
-      { label: '启动应用进程', glyph: 'play', disabled: disabled || isRunning(rec.app), act: function () {
+      // 伪应用（x11 会话）没有 supervisor 进程可启停，这两项直接不给
+      { label: '启动应用进程', glyph: 'play', hidden: !!(rec && rec.pseudo), disabled: disabled || isRunning(rec.app), act: function () {
           api('/apps/' + encodeURIComponent(rec.app.name) + '/start', { method: 'POST' })
             .then(refreshApps).then(function () { showToast('已启动 ' + appTitle(rec.app)); })
             .catch(function (e) { showToast('启动失败：' + e.message); });
         } },
-      { label: '停止应用进程', glyph: 'stop', disabled: disabled || !isRunning(rec.app), act: function () {
+      { label: '停止应用进程', glyph: 'stop', hidden: !!(rec && rec.pseudo), disabled: disabled || !isRunning(rec.app), act: function () {
           api('/apps/' + encodeURIComponent(rec.app.name) + '/stop', { method: 'POST' })
             .then(refreshApps).then(function () { showToast('已停止 ' + appTitle(rec.app)); })
             .catch(function (e) { showToast('停止失败：' + e.message); });
@@ -2634,6 +2806,7 @@
     m.setAttribute('role', 'menu');
     items.forEach(function (it) {
       if (it.sep) { m.appendChild(el('div', 'rx-menu-sep')); return; }
+      if (it.hidden) return;
       if (it.head) { m.appendChild(el('div', 'rx-menu-head', it.head)); return; }
       var b = el('button', 'rx-menu-item' + (it.destructive ? ' destructive' : ''));
       b.setAttribute('role', 'menuitem');
@@ -2665,7 +2838,7 @@
   function desktopMenuItems() {
     var items = [
       { label: '新建终端窗口', glyph: 'terminal', act: function () { openApp('term'); } },
-      { label: '新建终端命令…', glyph: 'terminal', act: function () { promptNewCommand(); } },
+      { label: '新建快捷方式…', glyph: 'terminal', act: function () { promptNewCommand(); } },
       { label: '打开应用…', glyph: 'external', key: '⌘O', act: openLauncher },
       { label: '开始菜单', glyph: 'runx', key: '⌘␣', act: openStartMenu },
       { sep: true },
@@ -2713,7 +2886,7 @@
         } },
       ...(ic.command ? [
         { sep: true },
-        { label: '编辑命令…', act: function () { promptNewCommand(ic); } },
+        { label: '编辑快捷方式…', act: function () { promptNewCommand(ic); } },
       ] : []),
       { label: '移到下一空格', act: function () { moveIconToFreeCell(ic); } },
       { sep: true },
@@ -2733,7 +2906,7 @@
     if (rec.app) {
       items.push({ label: '重新加载', key: '⌘R', act: function () {
           rec.veilHint.textContent = '正在加载…'; rec.veil.classList.remove('hidden');
-          rec.iframe.src = appOrigin(rec.app);
+          rec.iframe.src = originOf(rec);
         } });
     } else {
       items.push({ label: '刷新面板', act: function () {

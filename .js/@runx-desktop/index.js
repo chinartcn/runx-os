@@ -43,7 +43,9 @@ let S = null;
 
 // command / shell / icon 让一个图标可以代表「一条命令」（TUI 应用）而不仅是
 // 「一个已安装应用」：app 仍然指向 term（谁提供 PTY），command 说明在里面跑什么。
-const ICON_FIELDS = ['x', 'y', 'label', 'command', 'shell', 'icon'];
+// x11 让同一个图标改为「开一个 X11 图形会话」。桌面只负责存这个标志、把窗口
+// 画出来；会话由 @runx-x11 扩展提供（没装就点不开，两边没有编译期依赖）。
+const ICON_FIELDS = ['x', 'y', 'label', 'command', 'shell', 'icon', 'x11'];
 const WIDGET_FIELDS = ['x', 'y', 'w', 'h', 'config'];
 const TASKBAR_POSITIONS = ['top', 'bottom', 'left', 'right'];
 const THEMES = ['light', 'dark', 'auto'];
@@ -202,6 +204,8 @@ module.exports = {
       const d = load();
       const b = body || {};
       // 命令式快捷方式默认挂在 term 上：PTY 由它提供，桌面上只需要记「跑什么」。
+      // X11 图标例外 —— 它不需要 PTY，显示由 x11 会话提供。
+      if (!b.app && b.x11) b.app = 'x11';
       if (!b.app && b.command) b.app = 'term';
       if (!b.app) throw new Error('缺少 app');
       const cell = b.x != null && b.y != null ? { x: b.x, y: b.y } : nextFreeCell(d);
@@ -229,6 +233,12 @@ module.exports = {
         icon.command = c || null;
       }
       if (b.shell !== undefined) icon.shell = !!b.shell;
+      if (b.x11 !== undefined) {
+        icon.x11 = !!b.x11;
+        // 同一个图标可以在两种模式之间切换，app 跟着改：它只影响「这个图标
+        // 归谁管」的元数据，不改会让前端把 x11 图标当成终端图标去找应用。
+        if (icon.command) icon.app = icon.x11 ? 'x11' : 'term';
+      }
       if (b.icon !== undefined) {
         // emoji 图标：最多 4 个码点（"👨‍👩‍👧" 这类组合 emoji 也放得下）
         const e = b.icon == null ? '' : String(b.icon).trim();
@@ -448,6 +458,7 @@ module.exports = {
       if (!r.ok) throw Object.assign(new Error(j.message || j.error || '启动失败'), { code: 502 });
       return j;
     }
+
     function patchIcon(id, body) {
       const d = load();
       const icon = findIcon(d, id);

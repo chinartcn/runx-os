@@ -1,0 +1,10 @@
+{
+  "name": "X11 图形应用（RunX 扩展）",
+  "description": "在 Web 窗口里运行真正的 X11 程序：一个 RunX 窗口 = 一个无缝 X 会话。按需加载，检测不到后端时给安装建议而不是报错。",
+  "version": "0.1.0",
+  "author": "chinartcn",
+  "enabled": true,
+  "core": true,
+  "order": 60,
+  "requires": []
+}
