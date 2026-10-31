@@ -86,9 +86,10 @@ PORT=8080 node server.js   # 直接起内核 + 自定义端口
 RunX OS
 ├── server.js        NavExt 内核（静态服务 + 扩展系统 + 热重载）
 ├── os.js            特权层：受管进程 / 事件总线 / 文件系统护栏 / WS 原语
-├── .js/             13 个扩展（12 个 core:true，独享 ctx.os 特权通道）
+├── .js/             14 个扩展（13 个 core:true，独享 ctx.os 特权通道）
 │   ├── @runx-browser-api  浏览器能力层（探测 / 逐级降级 / 统一存储），唯一非 core
-│   ├── @runx-rights-manager 账号 / 授权 / UAC 审批 / 风险拦截（多用户）
+│   ├── @runx-ui           界面组件库的静态托管（/runx/ui/*，给应用页面用同一套视觉）
+│   ├── @runx-rights-manager 账号 / 授权 / UAC 审批 / 风险拦截 / 文件对话框 / 剪贴板（多用户）
 │   ├── @runx-administrator-mode 有限期提权票据（30 分钟自动失效 + 常驻红条）
 │   ├── @runx-supervisor   应用生命周期（启动 / 停止 / 重启 / autostart / 崩溃自愈）
 │   ├── @runx-node-safety  应用围栏（Node 权限模型 --permission）
@@ -104,9 +105,11 @@ RunX OS
 ├── packages/        应用开发包（不发 npm，从本仓库分发）
 │   ├── link.js      把 @runx/host / @runx/sdk 挂进应用（node packages/link.js --all）
 │   ├── runx-host    应用侧桌面 API（@runx/host：通知 / 窗口 / 主题 / 总线）
-│   └── runx-sdk     应用侧 OS 接口（@runx/sdk：fs / proc / net，走审批）
+│   ├── runx-sdk     应用侧 OS 接口（@runx/sdk：fs / proc / net / dialog / clipboard，走审批）
+│   └── runx-ui      界面组件库（.rx-* 类 + RX.* 交互，令牌与桌面逐字一致）
 ├── apps/            已部署应用（当前内置 term）
-│   └── term/        RunX 真实交互式终端（script 伪 PTY + xterm.js）
+│   ├── term/        RunX 真实交互式终端（script 伪 PTY + xterm.js）
+│   └── demo/        示例应用：五项能力的活文档（对话框 / 剪贴板 / 监听 / 流式 / stdin）
 ├── var/runx/        运行时状态（apps.json / desktop.json / logs），gitignore
 └── docs/            设计文档（RunX.OS.Termux.md / RunX.UI.md）
 ```
@@ -190,6 +193,70 @@ REST（均走 `/runx` 前缀）：
 | 列表 / 详情 | `GET /runx/apps` · `GET /runx/apps/:name` |
 | 启停 / 重启 | `POST /runx/apps/:name/start\|stop\|restart` |
 | 桌面图标 | `POST /runx/desktop/icons` |
+
+---
+
+## 界面组件库（runx-ui）
+
+应用页面跑在 iframe 里，它的按钮和窗口外面的桌面是两种长相 —— 除非它用同一套令牌。
+`packages/runx-ui` 就是那套令牌的组件化版本：**一套 CSS + 一个小脚本**，零构建。
+
+```html
+<link rel="stylesheet" href="http://127.0.0.1:3000/runx/ui/runx-ui.css">
+<script src="http://127.0.0.1:3000/runx/ui/runx-ui.js"></script>
+<body class="rx" data-theme="auto">
+  <button class="rx-btn primary">保存</button>
+</body>
+```
+
+- 令牌值逐字搬自桌面的 `tokens.css`：同一个 Inter、同一组语义红黄绿、同一条 `blur(12px)`。
+  两处不一致时，用户在窗口内外会看到两种蓝 —— 所以改之前先看桌面那份。
+- 所有选择器以 `.rx` 开头、所有变量带 `--rx-` 前缀。**装进应用不会改变它原有的任何样式**。
+- 主题三档：`light` / `dark` / `auto`（`prefers-color-scheme`，不需要 JS）。
+  应用也可以订阅桌面的主题事件跟着换（`host.theme.onChange`），这样窗口内外是同一种颜色。
+- 脚本只做「必须用 JS 才能做的事」：`RX.toast / dialog / confirm / prompt / menu`，
+  以及 `RX.bytes / duration / time` 这几个格式化函数。
+
+`.rx` 的底色是 `var(--rx-canvas)`，与桌面窗口内容区（`--canvas`）刻意同值 —— 应用在
+窗口里时，窗口内外是一块连续的画布；应用单独打开时，这一层就是它自己的底色。
+**不要在页面里写 `background: transparent`**：iframe 的 canvas 默认是白的，暗色主题下
+应用的白字会落在白底上，整页看不见东西。
+
+静态资源由 `@runx-ui` 扩展从 `/runx/ui/*` 提供（免登录 —— iframe 子资源不带 Cookie，
+要求登录的结果就是「样式偶尔加载失败」）。字体受 CORS 限制，所以 `fonts/` 也走这条
+带 `Access-Control-Allow-Origin` 的路由，而不是让页面直接引桌面目录。
+
+画廊：`http://<host>:3000/runx/ui/`。细节见 [packages/runx-ui/README.md](packages/runx-ui/README.md)。
+
+---
+
+## 示例应用（apps/demo）
+
+`apps/demo` 是一份**能跑起来的文档**：五个标签页对应五项能力，页面本身用 `runx-ui`
+写成 —— 这个应用里没有一行自己的按钮样式。
+
+| 标签 | 演示什么 | 值得注意的地方 |
+|---|---|---|
+| 文件 | `fs.read` / `fs.write` + `dialog.open` | 路径是**用户在桌面上点出来的**；选中即授权，紧接着读不会再问 |
+| 监听 | `fs.watch` | 内核 `fs.watch` + 应用侧长轮询，Node 18 也能用，不需要 WebSocket |
+| 大文件 | `fs.createReadStream` | 单块 1MB、总量不限；进度实时推给页面（SSE） |
+| 进程 | `proc.spawn({stdin:true})` + `write` / `end` | 默认不开 stdin；`tr` 的 4KB 缓冲会把短输入憋到 EOF |
+| 剪贴板 | `clipboard.read` / `write` | 写低危、读中危；桌面会尽力镜像到系统剪贴板 |
+
+装上就能开：
+
+```bash
+node packages/link.js demo                            # 挂上 @runx/sdk 与 @runx/host
+curl -X POST localhost:3000/runx/apps/install \
+     -d '{"source":"local","path":"'$PWD'/apps/demo"}'  # 经 PaX 安装
+curl -X POST localhost:3000/runx/apps/demo/start
+```
+
+它同时也是错误处理的样子：每个失败都带 `code` + 一句人话 + `hint`（下一步该怎么办），
+`ENOTRUNX / EPERM / NEED_ADMIN / ENOUI / ETIMEDOUT / ENOENT / EISDIR / ETOOBIG` 都有对应
+的提示文案 —— 应用该怎么对用户解释「这件事没做成」，这里可以直接抄。
+
+详见 [apps/demo/README.md](apps/demo/README.md)。
 
 ---
 

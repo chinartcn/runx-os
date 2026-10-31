@@ -18,6 +18,7 @@
  * 与应用的区别是：应用拿不到这份代码，只能通过 broker 的窄接口请求。
  */
 
+const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -32,6 +33,14 @@ const MAX_READ = 2 * 1024 * 1024;
 const MAX_WRITE = 4 * 1024 * 1024;
 const MAX_FETCH = 5 * 1024 * 1024;
 const FETCH_TIMEOUT = 20000;
+
+/** 分块读写的单块上限。流式传输的「安全阀」在这里，不在总量上 —— 总量
+ *  可能是一个 8GB 的磁盘镜像，只要一块一块地过就不会把内核撑爆。 */
+const MAX_CHUNK = 1024 * 1024;
+/** 单个应用能同时开几个 watch。再多就是轮询滥用，不是正常需求。 */
+const MAX_WATCHERS = 8;
+/** watch 多久没人来取事件就自动关掉（应用崩了没调 unwatch 是常态） */
+const WATCH_IDLE_MS = 5 * 60 * 1000;
 
 /** 云端元数据地址：能读它就等于能拿实例凭据，任何授权都不该放行 */
 const BLOCKED_HOSTS = [/^169\.254\./, /^100\.100\.100\.200$/, /^metadata\./];
@@ -60,6 +69,16 @@ function createBroker(opts) {
   const log = opts.log || (() => {});
   const children = new Map();   // pid -> child（还在跑的）
   const recent = new Map();     // pid -> rec（最近退出的，容量 20，供 proc.status 查收尾）
+  const watchers = new Map();   // id -> watch rec（fs.watch）
+
+  const dialog = opts.dialog || { open: () => Promise.resolve({ cancelled: true, via: 'no-dialog' }) };
+  const clipboard = opts.clipboard || null;
+
+  const clampInt = (v, lo, hi) => {
+    const n = Math.floor(Number(v));
+    if (!Number.isFinite(n)) return lo;
+    return Math.max(lo, Math.min(hi, n));
+  };
 
   function resolvePath(raw, cwd) {
     let p = String(raw == null ? '' : raw);
@@ -244,7 +263,197 @@ function createBroker(opts) {
     return { from: src, to: dst, auth };
   }
 
+  /* ── 分块 / 流式 ───────────────────────────────────────────── */
+
+  /**
+   * 读一段。
+   *
+   * 存在的理由是「2MB 上限」不是需求：视频、磁盘镜像、日志动辄几百 MB，
+   * 靠 `fs.read` 整块读，要么被拒、要么把内核内存吃穿。分块之后总量不再是
+   * 问题 —— 单块有上限，读多少块由应用自己决定，中间随时可以停。
+   *
+   * 返回的 `data` 永远是 base64：分块边界会切断多字节字符，服务端若按
+   * UTF-8 返回字符串，半个汉字会被替换成 U+FFFD，且无法还原。让字节保持
+   * 字节，解码交给应用（SDK 的 Readable 上 `setEncoding('utf8')` 会用
+   * StringDecoder 正确跨块拼接）。
+   */
+  async function fsReadRange(app, uid, q) {
+    const target = resolvePath(q.path, app.cwd);
+    const auth = await authorize({ app, uid, cap: 'fs.read', target, label: '分段读取' });
+    const st = fs.statSync(target);
+    if (st.isDirectory()) throw fail('EISDIR', '这是一个目录，请用 fs.list');
+
+    const offset = clampInt(q.offset, 0, st.size);
+    const want = clampInt(q.length, 1, MAX_CHUNK);
+    const room = Math.max(0, st.size - offset);
+    const len = Math.min(want, room);
+    const buf = Buffer.alloc(len);
+    let fd = null;
+    try {
+      fd = fs.openSync(target, 'r');
+      const n = len ? fs.readSync(fd, buf, 0, len, offset) : 0;
+      return {
+        path: target, offset, size: st.size, bytes: n,
+        eof: offset + n >= st.size,
+        data: buf.slice(0, n).toString('base64'),
+        mtime: st.mtimeMs, auth,
+      };
+    } finally {
+      if (fd !== null) { try { fs.closeSync(fd); } catch { /* 已关 */ } }
+    }
+  }
+
+  /**
+   * 写一段。
+   *
+   * 三种落点：`truncate`（新建/清空后写下这一块）、`append`（接在末尾）、
+   * `offset`（写到指定位置，用于「只改中间某几个字节」）。不带任何参数时
+   * 默认 offset=0 覆盖写 —— 那是块传输的第一步，后续块必须带 offset。
+   */
+  async function fsWriteRange(app, uid, q) {
+    const target = resolvePath(q.path, app.cwd);
+    const truncate = !!q.truncate;
+    const auth = await authorize({
+      app, uid, cap: 'fs.write', target,
+      label: truncate ? '创建 / 覆盖文件' : '分段写入',
+    });
+    const buf = Buffer.from(String(q.data == null ? '' : q.data),
+      q.encoding === 'utf8' ? 'utf8' : 'base64');
+    if (buf.length > MAX_CHUNK) throw fail('ETOOBIG', `单块超过 ${MAX_CHUNK / 1024}KB`);
+
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    let size = 0;
+    if (truncate) {
+      fs.writeFileSync(target, buf);
+      size = buf.length;
+    } else if (q.append) {
+      fs.appendFileSync(target, buf);
+      size = fs.statSync(target).size;
+    } else {
+      const offset = clampInt(q.offset, 0, Number.MAX_SAFE_INTEGER);
+      const exists = fs.existsSync(target);
+      let fd = null;
+      try {
+        fd = fs.openSync(target, exists ? 'r+' : 'w+');
+        if (buf.length) fs.writeSync(fd, buf, 0, buf.length, offset);
+        size = fs.fstatSync(fd).size;
+      } finally {
+        if (fd !== null) { try { fs.closeSync(fd); } catch { /* 已关 */ } }
+      }
+    }
+    return { path: target, bytes: buf.length, size, auth };
+  }
+
+  /* ── 监听 ─────────────────────────────────────────────────── */
+
+  function reapWatchers() {
+    const now = Date.now();
+    for (const [id, rec] of watchers) {
+      if (now - (rec.lastPoll || rec.created_at) > WATCH_IDLE_MS) closeWatcher(rec, 'idle');
+    }
+  }
+
+  function closeWatcher(rec, why) {
+    if (rec.closed) return;
+    rec.closed = why || 'closed';
+    try { rec.fsw.close(); } catch { /* 已经关过了 */ }
+    watchers.delete(rec.id);
+    // 等事件的一方要立刻醒过来，否则它的长轮询会挂到超时才返回「已关闭」
+    rec.waiters.splice(0).forEach((fn) => { try { fn(); } catch { /* ignore */ } });
+    log(`watch 关闭：${rec.app} ${rec.path} (${rec.closed})`);
+  }
+
+  /**
+   * 盯住一个路径。
+   *
+   * 为什么不用「应用自己 fs.watch」：应用进程可能被围栏挡住、可能跑在容器外，
+   * 而且它看到的路径和内核看到的不一定是同一个。这里由内核盯，应用拿事件。
+   *
+   * 事件传输用长轮询（`fsPoll`）而不是 WebSocket：SDK 要能在 Node 18 上用，
+   * 而 18 没有内置 WebSocket；长轮询每个应用都会写，代价只有一次打开的连接。
+   */
+  async function fsWatch(app, uid, q) {
+    const target = resolvePath(q.path, app.cwd);
+    const auth = await authorize({ app, uid, cap: 'fs.watch', target, label: '监听文件变化' });
+
+    reapWatchers();
+    const mine = Array.from(watchers.values()).filter((w) => w.app === app.name);
+    if (mine.length >= MAX_WATCHERS) {
+      // 先关最老的：应用大概是忘了 unwatch，继续拒绝会让它整个功能卡死
+      mine.sort((a, b) => a.created_at - b.created_at);
+      closeWatcher(mine[0], 'evicted');
+    }
+
+    const st = fs.statSync(target);   // 不存在就 ENOENT，别静默成功
+    const rec = {
+      id: crypto.randomBytes(6).toString('hex'),
+      app: app.name, path: target, is_dir: st.isDirectory(),
+      seq: 0, events: [], waiters: [], created_at: Date.now(), lastPoll: Date.now(),
+      closed: null,
+    };
+    rec.fsw = fs.watch(target, { persistent: false, recursive: false }, (event, name) => {
+      rec.seq++;
+      rec.events.push({ seq: rec.seq, event, name: name == null ? null : String(name), at: Date.now() });
+      if (rec.events.length > 200) rec.events.splice(0, rec.events.length - 200);
+      rec.waiters.splice(0).forEach((fn) => { try { fn(); } catch { /* ignore */ } });
+    });
+    rec.fsw.on('error', (e) => {
+      rec.error = e.code || e.message;
+      closeWatcher(rec, 'error');
+    });
+    if (rec.fsw.unref) rec.fsw.unref();
+    watchers.set(rec.id, rec);
+    log(`watch：${app.name} ${target}`);
+    return { id: rec.id, path: target, watching: true, is_dir: rec.is_dir, auth };
+  }
+
+  /**
+   * 取事件（长轮询）。
+   *
+   * `after` 是应用已处理到的序号。带 `timeout` 时，没事件就挂住最多 timeout
+   * 毫秒 —— 比「每 200ms 发一次请求」省得多，也比 WebSocket 简单。
+   * timeout 上限 25 秒：再长会遇到中间层（反代、手机浏览器）的空闲超时。
+   */
+  function fsPoll(app, q) {
+    const rec = watchers.get(String(q.id || ''));
+    if (!rec || rec.app !== app.name) throw fail('ENOENT', '监听不存在或已过期，请重新 fs.watch');
+    const after = clampInt(q.after, 0, Number.MAX_SAFE_INTEGER);
+    const timeout = clampInt(q.timeout, 0, 25000);
+    rec.lastPoll = Date.now();
+
+    const collect = () => ({
+      id: rec.id, seq: rec.seq, closed: rec.closed || null,
+      events: rec.events.filter((e) => e.seq > after),
+    });
+    const ready = collect();
+    if (ready.events.length || !timeout || ready.closed) return Promise.resolve(ready);
+
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        const i = rec.waiters.indexOf(finish);
+        if (i >= 0) rec.waiters.splice(i, 1);
+        resolve(collect());
+      };
+      // 这个 timer 不能 unref：unref 之后「等待」不再让事件循环活着，
+      // 一个只在等文件变化的进程会**静默退出**，看起来像 poll 永远不返回。
+      const timer = setTimeout(finish, timeout);
+      rec.waiters.push(finish);
+    });
+  }
+
+  function fsUnwatch(app, q) {
+    const rec = watchers.get(String(q.id || ''));
+    if (!rec || rec.app !== app.name) return { id: String(q.id || ''), closed: false };
+    closeWatcher(rec, 'app');
+    return { id: rec.id, closed: true };
+  }
+
   /* ── 进程 ─────────────────────────────────────────────────── */
+
 
   async function procSpawn(app, uid, q) {
     const argv = Array.isArray(q.argv) ? q.argv.map(String) : [];
@@ -262,13 +471,25 @@ function createBroker(opts) {
     });
 
     // 不用 shell：应用传的是 argv 数组，没有机会插一条 `; rm -rf /`
+    //
+    // stdin 默认是 'ignore' 而不是 'pipe'：很多命令（cat、grep、任何等输入的
+    // 交互程序）在有管道时会一直等，而应用若没打算喂数据，那个进程就永远不退出。
+    // 需要喂的时候显式 { stdin: true }，那时才建管道。
+    const wantStdin = !!q.stdin;
     const child = cp.spawn(argv[0], argv.slice(1), {
       cwd,
       env: Object.assign({}, process.env, q.env || {}),
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: [wantStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'],
       detached: false,
     });
-    const rec = { pid: child.pid, argv, started_at: Date.now(), out: '', err: '', running: true };
+    const rec = {
+      pid: child.pid, argv, started_at: Date.now(), out: '', err: '', running: true,
+      stdin: wantStdin ? child.stdin : null, stdin_closed: !wantStdin,
+    };
+    if (rec.stdin) {
+      // 子进程先退出时写 stdin 会 EPIPE。不接住就是一条未捕获异常，整个内核陪葬。
+      rec.stdin.on('error', (e) => { rec.stdin_error = e.code || e.message; rec.stdin_closed = true; });
+    }
     const keep = (buf, chunk) => (buf + chunk.toString()).slice(-8192);
     child.stdout.on('data', (d) => { rec.out = keep(rec.out, d); });
     child.stderr.on('data', (d) => { rec.err = keep(rec.err, d); });
@@ -294,6 +515,7 @@ function createBroker(opts) {
       pid: rec.pid, known: true, running: !!rec.running, argv: rec.argv,
       started_at: rec.started_at, exit: rec.exit || null,
       stdout: rec.out, stderr: rec.err,
+      stdin: !!rec.stdin && !rec.stdin_closed, stdin_error: rec.stdin_error || null,
     };
   }
 
@@ -303,6 +525,38 @@ function createBroker(opts) {
     try { process.kill(n, sig || 'SIGTERM'); }
     catch (e) { return { pid: n, ok: false, message: e.message }; }
     return { pid: n, ok: true, ours: !!rec };
+  }
+
+  /**
+   * 往子进程的 stdin 写一段。
+   *
+   * 单独开一个接口而不是「spawn 时一次给完」：`git commit`、`passwd`、
+   * 任何 REPL 都是「先看到提示再回答」，一次给完它们会忽略后面的输入。
+   */
+  function procWrite(pid, q) {
+    const n = Number(pid);
+    const rec = children.get(n);
+    if (!rec) throw fail('ENOENT', '进程不在运行中（可能已退出）');
+    if (!rec.stdin || rec.stdin_closed) {
+      throw fail('EINVAL', rec.stdin ? 'stdin 已关闭' : 'spawn 时没有请求 stdin（{stdin:true}）');
+    }
+    const buf = Buffer.from(String(q.data == null ? '' : q.data),
+      q.encoding === 'utf8' ? 'utf8' : 'base64');
+    if (buf.length > 64 * 1024) throw fail('ETOOBIG', '单次写入超过 64KB');
+    try { rec.stdin.write(buf); }
+    catch (e) { throw fail('EPIPE', '写入 stdin 失败：' + e.message); }
+    return { pid: n, bytes: buf.length };
+  }
+
+  /** 关掉 stdin（发 EOF）。`cat` 这类命令靠这个才知道输入结束 */
+  function procEnd(pid) {
+    const n = Number(pid);
+    const rec = children.get(n);
+    if (!rec) return { pid: n, closed: false, reason: 'gone' };
+    if (!rec.stdin || rec.stdin_closed) return { pid: n, closed: !!rec.stdin_closed };
+    try { rec.stdin.end(); } catch { /* 已经断了 */ }
+    rec.stdin_closed = true;
+    return { pid: n, closed: true };
   }
 
   /* ── 网络 ─────────────────────────────────────────────────── */
@@ -353,6 +607,82 @@ function createBroker(opts) {
     return Object.assign(res, { url: u.href, auth });
   }
 
+  /* ── 对话框 ───────────────────────────────────────────────── */
+
+  /**
+   * 让用户在桌面上挑一个文件 / 定一个保存位置 / 回答一个问题。
+   *
+   * ── 为什么这里不做 UAC ─────────────────────────────────────────
+   * 「申请权限去申请权限」是荒谬的：对话框本身就是用户在做的决定。所以
+   * `dialog.open` 不查授权表，改为三条约束：
+   *   1. 同一应用同时只能有 1 个挂起的对话框（不能拿它刷屏）；
+   *   2. 起始目录只能是应用沙箱或用户主目录（`startIn` 由 dialog.js 白名单校验）；
+   *   3. 用户选中的路径会被记成一条**仅该路径**的读（保存框另加写）授权 ——
+   *      但**高危路径除外**：挑中私钥仍然要走一次正常审批，因为「点了一个文件」
+   *      和「知道这个应用要拿它做什么」是两件事。
+   */
+  async function dialogOpen(app, uid, q) {
+    const kind = ['open', 'save', 'message'].includes(q.kind) ? q.kind : 'open';
+    const risk = assess('dialog.open', '/dialog', { sandbox: app.sandbox });
+
+    const ans = await dialog.open({
+      kind,
+      app: app.name, app_label: app.label, uid, user_name: q.user_name,
+      title: q.title, message: q.message,
+      options: {
+        startIn: q.startIn, filters: q.filters, multiple: q.multiple,
+        defaultName: q.defaultName, buttons: q.buttons,
+      },
+    });
+
+    if (ans.cancelled) {
+      return { cancelled: true, via: ans.via || 'user', risk };
+    }
+    if (kind === 'message') return { cancelled: false, value: ans.value, risk };
+
+    // 选中的路径 = 一次明确授权（高危目标除外）
+    const granted = [];
+    const skipped = [];
+    for (const p of (ans.paths || [])) {
+      const caps = kind === 'save' ? ['fs.write', 'fs.read'] : ['fs.read'];
+      for (const cap of caps) {
+        if (assess(cap, p, { sandbox: app.sandbox }).level === 'high') { skipped.push(p); continue; }
+        try {
+          const g = opts.grants.grant(uid, {
+            app: app.name, cap, scope: p, by: 'dialog', note: '用户在文件对话框中选择',
+          });
+          if (g && g.id) granted.push(g.id);
+        } catch { /* 授权表满/格式问题：不影响本次返回，应用读的时候还会被问 */ }
+      }
+    }
+    if (skipped.length) log(`对话框选中高危路径，未自动授权：${skipped.join(', ')}`);
+    return {
+      cancelled: false, path: ans.path, paths: ans.paths || [],
+      granted, risk,
+    };
+  }
+
+  /* ── 剪贴板 ───────────────────────────────────────────────── */
+
+  async function clipboardRead(app, uid) {
+    if (!clipboard) throw fail('ENOSYS', '剪贴板服务没有加载');
+    const auth = await authorize({ app, uid, cap: 'clipboard.read', target: '/clipboard', label: '读取剪贴板' });
+    const item = clipboard.read();
+    return {
+      text: item ? item.text : '', empty: !item,
+      at: item ? item.at : 0, size: item ? item.size : 0,
+      source: item ? (item.app || item.by || null) : null,
+      auth,
+    };
+  }
+
+  async function clipboardWrite(app, uid, q) {
+    if (!clipboard) throw fail('ENOSYS', '剪贴板服务没有加载');
+    const auth = await authorize({ app, uid, cap: 'clipboard.write', target: '/clipboard', label: '写入剪贴板' });
+    const r = clipboard.write({ text: q.text, mime: q.mime, by: uid, app: app.name });
+    return Object.assign({}, r, { auth });
+  }
+
   /* ── 系统信息（低危，仍记审计） ───────────────────────────── */
 
   async function sysInfo(app, uid) {
@@ -368,13 +698,28 @@ function createBroker(opts) {
     };
   }
 
+  /** 应用停止时收拾它的 watch（supervisor 会调；漏了也有 idle 兜底） */
+  function releaseApp(name) {
+    let n = 0;
+    for (const rec of Array.from(watchers.values())) {
+      if (rec.app === name) { closeWatcher(rec, 'app-stop'); n++; }
+    }
+    return n;
+  }
+
   return {
     authorize, resolvePath, defaultScope,
     read: fsRead, write: fsWrite, list: fsList, stat: fsStat,
     mkdir: fsMkdir, remove: fsRemove, copy: fsCopy,
-    spawn: procSpawn, procStatus, procKill, fetch: netFetch, info: sysInfo,
-    children,
+    readRange: fsReadRange, writeRange: fsWriteRange,
+    watch: fsWatch, poll: fsPoll, unwatch: fsUnwatch,
+    spawn: procSpawn, procStatus, procKill, procWrite, procEnd,
+    fetch: netFetch, info: sysInfo,
+    dialog: dialogOpen,
+    clipboardRead, clipboardWrite,
+    releaseApp,
+    children, watchers,
   };
 }
 
-module.exports = { createBroker, MAX_READ, MAX_WRITE };
+module.exports = { createBroker, MAX_READ, MAX_WRITE, MAX_CHUNK };

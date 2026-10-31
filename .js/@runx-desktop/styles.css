@@ -564,7 +564,10 @@
   position: relative;
   flex: 1;
   min-height: 0;
-  background: #fff;
+  /* 应用画布：应用页面把 body 设成 transparent，底色由这一层给。
+     必须是 --canvas（跟主题走），不能写死 #fff —— 暗色主题下应用的
+     白字会落在白底上，整页看不见东西。 */
+  background: var(--canvas);
   overflow: hidden;
 }
 #runx-desktop .rx-win-body iframe {

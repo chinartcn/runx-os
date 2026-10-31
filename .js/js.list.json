@@ -1,5 +1,6 @@
 [
   "@runx-browser-api",
+  "@runx-ui",
   "@runx-rights-manager",
   "@runx-administrator-mode",
   "@runx-supervisor",

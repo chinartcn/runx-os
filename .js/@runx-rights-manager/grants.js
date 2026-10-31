@@ -23,10 +23,19 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-const CAPS = ['fs.read', 'fs.write', 'fs.list', 'fs.stat', 'fs.remove', 'fs.mkdir', 'fs.copy', 'proc.spawn', 'net.fetch', 'sys.info'];
+const CAPS = [
+  'fs.read', 'fs.write', 'fs.list', 'fs.stat', 'fs.remove', 'fs.mkdir', 'fs.copy', 'fs.watch',
+  'proc.spawn', 'net.fetch', 'sys.info',
+  // 不碰文件、但要经过用户的两件事：让用户自己挑一个文件（等于「我指定了它」），
+  // 以及共享剪贴板（跨应用的数据通道，读的那一侧值得问一声）。
+  'dialog.open', 'clipboard.read', 'clipboard.write',
+];
+
+/** 读能力家族：一条 fs.read 授权覆盖同作用域的 list / stat / watch */
+const READ_FAMILY = new Set(['fs.list', 'fs.stat', 'fs.watch']);
 
 /** 只读能力：同一作用域下写能力自动覆盖读能力，反之不成立 */
-const READONLY = new Set(['fs.read', 'fs.list', 'fs.stat', 'sys.info']);
+const READONLY = new Set(['fs.read', 'fs.list', 'fs.stat', 'fs.watch', 'sys.info']);
 
 function newId() { return crypto.randomBytes(6).toString('hex'); }
 
@@ -152,21 +161,33 @@ function assess(cap, target, ctx) {
 
   if (cap === 'sys.info') return { level: 'low', why: '只读的系统信息' };
 
+  /* 非文件能力：作用域不是路径，别拿它去跑路径规则 */
+  if (cap === 'dialog.open') {
+    // 用户自己在浏览器里点的文件，就是「我要给这个应用看这个文件」的表达。
+    // 反过来说：不让应用自选路径的对话框，比让它直接读更安全。
+    return { level: 'low', why: '由用户在桌面上亲自选择，应用无法指定路径' };
+  }
+  if (cap === 'clipboard.write') return { level: 'low', why: '只写不读，等于把文字放进共享缓冲区' };
+  if (cap === 'clipboard.read') {
+    return { level: 'medium', why: '剪贴板里可能刚复制过密码、验证码或私钥' };
+  }
+
   // 以下都是文件类
+  const readLike = cap === 'fs.read' || cap === 'fs.list' || cap === 'fs.stat' || cap === 'fs.watch';
   if (SYSTEM_PREFIXES.some((p) => t === p || t.indexOf(p + '/') === 0)) {
-    level = worst(level, cap === 'fs.read' || cap === 'fs.list' || cap === 'fs.stat' ? 'medium' : 'high');
+    level = worst(level, readLike ? 'medium' : 'high');
     reasons.push('系统目录');
   }
   if (SECRET_GLOBS.some((g) => covers(g, t))) {
     level = worst(level, 'high');
     reasons.push('凭据文件');
   }
-  if (cap !== 'fs.read' && cap !== 'fs.list' && cap !== 'fs.stat' && CODE_GLOBS.some((g) => covers(g, t))) {
+  if (!readLike && CODE_GLOBS.some((g) => covers(g, t))) {
     level = worst(level, 'high');
     reasons.push('程序代码');
   }
   // 改自己的代码 = 改下次启动要跑的东西，和「装个后门」等价
-  if (cap !== 'fs.read' && cap !== 'fs.list' && cap !== 'fs.stat' && inOwnCode(t)) {
+  if (!readLike && inOwnCode(t)) {
     level = worst(level, 'high');
     reasons.push('应用自身的程序文件');
   }
@@ -174,7 +195,7 @@ function assess(cap, target, ctx) {
     level = worst(level, 'medium');
     reasons.push('删除不可撤销');
   }
-  if (!inSandbox(t) && (cap === 'fs.read' || cap === 'fs.list' || cap === 'fs.stat')) {
+  if (!inSandbox(t) && readLike) {
     level = worst(level, 'medium');
     reasons.push('应用沙箱之外');
   }
@@ -282,7 +303,11 @@ function createGrants(opts) {
       if (g.app !== '*' && g.app !== q.app) continue;
       const same = g.cap === q.cap;
       const writeCoversRead = READONLY.has(q.cap) && g.cap === 'fs.write';
-      if (!same && !writeCoversRead) continue;
+      // 读能力之间互相覆盖：一条 `fs.read:/data/**` 让 list / stat / watch 也通。
+      // 不这么做的话，应用读一个文件要先被问「读」，再被问「看信息」，再被问
+      // 「列目录」—— 用户面对的是同一个决定，问三遍只训练出盲点习惯。
+      const readCoversRead = READ_FAMILY.has(q.cap) && g.cap === 'fs.read';
+      if (!same && !writeCoversRead && !readCoversRead) continue;
       if (!covers(g.scope, target)) continue;
       // 多命中时优先「应用精确 → 作用域最窄」的那条，只是为了让 UI 显示得准
       if (!best || (best.app === '*' && g.app !== '*')) best = g;
@@ -293,4 +318,4 @@ function createGrants(opts) {
   return { load, save, grant, revoke, clear, list, find, fileOf };
 }
 
-module.exports = { CAPS, READONLY, createGrants, assess, covers, globToRe, normPath, newId, RISK_ORDER, worst };
+module.exports = { CAPS, READONLY, READ_FAMILY, createGrants, assess, covers, globToRe, normPath, newId, RISK_ORDER, worst };

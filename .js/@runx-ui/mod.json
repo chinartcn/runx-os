@@ -1,0 +1,10 @@
+{
+  "name": "界面组件库（RunX 扩展）",
+  "description": "把 RunX 的设计令牌与标准控件以 /runx/ui/* 提供给应用页面：一套 CSS + 少量 JS，和桌面同一套视觉语言。",
+  "version": "1.0.0",
+  "author": "chinartcn",
+  "enabled": true,
+  "core": true,
+  "order": 4,
+  "requires": []
+}

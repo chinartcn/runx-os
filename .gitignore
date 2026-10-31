@@ -10,6 +10,9 @@
 # 依赖（本项目零运行时依赖，无需 node_modules）
 node_modules/
 
+# 示例应用的运行时数据（由 /api/seed 现生成，含一个 4MB 的假大文件）
+/apps/demo/data/
+
 # 系统 / 编辑器
 .DS_Store
 .idea/

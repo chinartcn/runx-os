@@ -137,6 +137,13 @@ function plan(app, cfg) {
         const n = toNodePath(scope, cwd); if (n) { writes.push(n); reads.push(n); }
       } else if (cap === 'fs.copy') {
         const n = toNodePath(scope, cwd); if (n) { writes.push(n); reads.push(n); }
+      } else if (cap === 'fs.watch') {
+        // 监听只需要读：能看到目录内容就够，不需要写
+        const n = toNodePath(scope, cwd); if (n) reads.push(n);
+      } else if (cap === 'dialog.open' || cap === 'clipboard.read' || cap === 'clipboard.write') {
+        // 这两类不进进程围栏：对话框由用户点、剪贴板是内核里的一份缓冲区。
+        // 写进 notes 是让「为什么这里没有 --allow-*」有据可查。
+        notes.push(cap + ' 由审批层（broker）控制，Node 权限模型没有对应开关');
       } else if (cap === 'proc.spawn') {
         childProcess = true;
       } else if (cap === 'proc.worker') {

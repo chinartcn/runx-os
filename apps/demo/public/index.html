@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>示例 · RunX</title>
+<!-- 组件库由内核提供（@runx-ui 扩展）。地址在服务端渲染时替换成真实网关。 -->
+<link rel="stylesheet" href="__GATEWAY__/runx/ui/runx-ui.css">
+<style>
+  /* 底色交给组件库：.rx 的 background 是 var(--rx-canvas)，跟桌面窗口
+     内容区（--canvas）同一个值 —— 应用在窗口里与窗口外是一块连续的画布。
+     不要在这里写 transparent：iframe 的 canvas 默认是白的，暗色主题下
+     会「白底 + 白字」。 */
+  html { margin: 0; height: 100%; }
+  body.rx {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  .top {
+    display: flex; align-items: center; gap: 10px;
+    padding: 12px 16px 0;
+  }
+  .top .grow { flex: 1; min-width: 0; }
+  .top h1 { font: var(--rx-font-subtitle); margin: 0; letter-spacing: var(--rx-tracking-title); }
+  .top .url { font: 11px/1.4 var(--rx-font-mono); color: var(--rx-label-tertiary); }
+  .tabs { padding: 8px 16px 0; }
+  .body { flex: 1; overflow: auto; padding: 14px 16px 24px; }
+  .stack { display: flex; flex-direction: column; gap: 12px; max-width: 720px; margin: 0 auto; }
+  .card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+  .card-head .t { font: var(--rx-font-toolbar); flex: 1; }
+  .row-inline { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .mono {
+    font: 12px/1.5 var(--rx-font-mono);
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 220px;
+    overflow: auto;
+  }
+  .path {
+    font: 12px/1.45 var(--rx-font-mono);
+    color: var(--rx-label-secondary);
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .hint { font: var(--rx-font-caption); color: var(--rx-label-tertiary); margin: 8px 0 0; }
+  .err { font: var(--rx-font-caption); color: var(--rx-semantic-red); margin: 8px 0 0; }
+  .err b { font-weight: 600; }
+  .kv { display: grid; grid-template-columns: 78px 1fr; gap: 4px 10px; font: var(--rx-font-caption); }
+  .kv dt { color: var(--rx-label-tertiary); }
+  .kv dd { margin: 0; color: var(--rx-label-primary); font-variant-numeric: tabular-nums; }
+  .log { max-height: 180px; overflow: auto; font: 11.5px/1.6 var(--rx-font-mono); }
+  .log div { padding: 1px 0; border-bottom: 0.5px solid var(--rx-hairline); }
+  .log .t { color: var(--rx-label-tertiary); margin-right: 6px; }
+  .status-dot { width: 7px; height: 7px; border-radius: 999px; background: var(--rx-label-quaternary); flex: none; }
+  .status-dot.on { background: var(--rx-semantic-green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--rx-semantic-green) 18%, transparent); }
+</style>
+</head>
+<body class="rx" data-theme="auto">
+
+<div class="top">
+  <h1>RunX 示例</h1>
+  <span class="rx-badge" id="badge-sdk"><span class="status-dot" id="dot"></span><span id="badge-txt">SDK 检测中</span></span>
+  <span class="grow"></span>
+  <div class="rx-seg" id="theme">
+    <button data-value="light">浅色</button>
+    <button data-value="dark">深色</button>
+    <button data-value="auto" class="on">跟随系统</button>
+  </div>
+</div>
+<div class="url" style="padding:0 16px">__GATEWAY__ · 应用 <span id="app-name">__APP__</span></div>
+
+<div class="tabs">
+  <div class="rx-tabs" id="tabs">
+    <button class="rx-tab on" data-target="#p-file">文件</button>
+    <button class="rx-tab" data-target="#p-watch">监听</button>
+    <button class="rx-tab" data-target="#p-stream">大文件</button>
+    <button class="rx-tab" data-target="#p-proc">进程</button>
+    <button class="rx-tab" data-target="#p-clip">剪贴板</button>
+  </div>
+</div>
+
+<div class="body">
+  <div class="stack">
+
+    <!-- ── 文件 ── -->
+    <section id="p-file" class="rx-card">
+      <div class="card-head">
+        <span class="t">文件：让用户在桌面上选一个路径</span>
+        <button class="rx-btn sm" id="btn-seed">铺示例文件</button>
+      </div>
+      <p class="rx-caption">路径由<b>用户</b>在桌面的选择器里点出来 —— 应用不能指定。选中之后，读它不会再问第二次。</p>
+      <div class="row-inline" style="margin-top:10px">
+        <button class="rx-btn primary" id="btn-open">选择文件…</button>
+        <button class="rx-btn" id="btn-save">另存为…</button>
+        <span class="path" id="picked">未选择</span>
+      </div>
+      <div class="row-inline" style="margin-top:10px">
+        <button class="rx-btn" id="btn-read">读取</button>
+        <button class="rx-btn" id="btn-list">列出目录</button>
+        <input class="rx-input" id="save-text" placeholder="要写进文件的内容" style="flex:1;min-width:160px" value="来自示例应用的一行文字">
+      </div>
+      <div class="mono rx-code" id="file-out" style="margin-top:10px;display:none"></div>
+      <p class="err" id="file-err" style="display:none"></p>
+    </section>
+
+    <!-- ── 监听 ── -->
+    <section id="p-watch" class="rx-card" hidden>
+      <div class="card-head"><span class="t">监听：文件变了就告诉我</span>
+        <button class="rx-btn sm" id="btn-watch-stop">停止</button>
+      </div>
+      <p class="rx-caption">内核 watch + 长轮询，不需要 WebSocket（Node 18 也能用）。窗口关掉再打开，事件仍然在流。</p>
+      <div class="row-inline" style="margin-top:10px">
+        <button class="rx-btn primary" id="btn-watch">监听所选路径</button>
+        <span class="path" id="watch-path">未开始</span>
+      </div>
+      <div class="log" id="watch-log" style="margin-top:10px"></div>
+      <p class="hint">在文件管理器里改一下 data/welcome.md，这里会立刻出现一行。</p>
+    </section>
+
+    <!-- ── 大文件 ── -->
+    <section id="p-stream" class="rx-card" hidden>
+      <div class="card-head"><span class="t">大文件：分块读过 2MB 上限</span></div>
+      <p class="rx-caption"><code>fs.read</code> 单次上限 2MB；这里是 <code>createReadStream</code>，一块 256KB，总量不限。</p>
+      <div class="row-inline" style="margin-top:10px">
+        <button class="rx-btn primary" id="btn-stream">流式读取</button>
+        <span class="path" id="stream-path">data/big.bin · 4 MB（先点「铺示例文件」生成）</span>
+      </div>
+      <div class="rx-progress" style="margin-top:12px"><i id="stream-bar"></i></div>
+      <dl class="kv" style="margin-top:10px">
+        <dt>已读</dt><dd id="stream-bytes">0 B</dd>
+        <dt>块数</dt><dd id="stream-chunks">0</dd>
+        <dt>耗时</dt><dd id="stream-ms">—</dd>
+        <dt>速度</dt><dd id="stream-speed">—</dd>
+      </dl>
+    </section>
+
+    <!-- ── 进程 ── -->
+    <section id="p-proc" class="rx-card" hidden>
+      <div class="card-head"><span class="t">进程：起一个、喂输入、收输出</span></div>
+      <p class="rx-caption">默认跑 <code>tr a-z A-Z</code>：输入什么就回什么（大写）。启动子进程是<b>高危</b>操作，需要先开管理员模式。</p>
+      <p class="rx-caption" style="margin-top:6px">一个小坑写在这里：<code>tr</code> 在管道里是 4KB 全缓冲，短输入要等「结束输入」才会吐出来 —— 那是 <code>tr</code> 的缓冲，不是 SDK 慢。想立刻看到回显就用 <code>cat</code>。</p>
+      <div class="row-inline" style="margin-top:10px">
+        <button class="rx-btn primary" id="btn-spawn">启动</button>
+        <button class="rx-btn" id="btn-feed" disabled>发送</button>
+        <button class="rx-btn" id="btn-eof" disabled>结束输入</button>
+        <span class="status" id="proc-status">未启动</span>
+      </div>
+      <textarea class="rx-textarea" id="proc-in" rows="2" style="margin-top:10px">hello runx</textarea>
+      <div class="mono rx-code" id="proc-out" style="margin-top:10px;display:none"></div>
+      <p class="err" id="proc-err" style="display:none"></p>
+    </section>
+
+    <!-- ── 剪贴板 ── -->
+    <section id="p-clip" class="rx-card" hidden>
+      <div class="card-head"><span class="t">剪贴板：跨应用的一条文本通道</span></div>
+      <p class="rx-caption">内核里的一份共享文本。读它要问一次（可能刚复制过密码）；写是低危，会顺带尝试同步到系统剪贴板。</p>
+      <div class="row-inline" style="margin-top:10px">
+        <button class="rx-btn primary" id="btn-clip-read">读取</button>
+        <button class="rx-btn" id="btn-clip-write">写入</button>
+        <input class="rx-input" id="clip-in" value="来自示例应用" style="flex:1;min-width:150px">
+      </div>
+      <div class="mono rx-code" id="clip-out" style="margin-top:10px;display:none"></div>
+      <p class="err" id="clip-err" style="display:none"></p>
+      <hr class="rx-hairline" style="margin:14px 0">
+      <p class="hint">下面这些控件全部来自 <code>/runx/ui/runx-ui.css</code>：本页没有一行自己的按钮样式。</p>
+      <div class="row-inline" style="margin-top:8px">
+        <button class="rx-btn">普通按钮</button>
+        <button class="rx-btn soft">次要</button>
+        <button class="rx-btn destructive">破坏性</button>
+        <label class="rx-switch"><input type="checkbox" checked><span class="rx-track"></span><span class="rx-body">开关</span></label>
+        <button class="rx-btn" id="btn-toast">Toast</button>
+      </div>
+    </section>
+
+  </div>
+</div>
+
+<script src="__GATEWAY__/runx/ui/runx-ui.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>RunX UI · 组件</title>
+<link rel="stylesheet" href="runx-ui.css">
+<style>
+  /* 这一页自己的布局。组件库不带布局，只有控件。 */
+  html { margin: 0; }
+  body.rx {
+    margin: 0;
+    min-height: 100vh;
+    color: var(--rx-label-primary);
+  }
+  /* 底色跟着主题走，别写死渐变 —— 否则「跟随系统」时，
+     系统是亮色而背景还是深色渐变，令牌与底色对不上。
+     渐变叠在画布色上：亮色用冷白，暗色用近黑。 */
+  body.rx[data-theme="dark"],
+  body.rx[data-theme="auto"] {
+    background:
+      radial-gradient(120% 90% at 15% 0%, #24304f 0%, #10131d 55%, #0a0c12 100%),
+      var(--rx-canvas);
+  }
+  body.rx[data-theme="light"] {
+    background:
+      radial-gradient(120% 90% at 15% 0%, #dfe7f7 0%, #eef1f7 55%, #f6f7fa 100%),
+      var(--rx-canvas);
+  }
+  /* 「跟随系统」时系统是亮色 → 令牌是亮色 → 底色也得是亮色。
+     CSS 没有「按系统换渐变」的语法，只能在媒体查询里再写一遍。 */
+  @media (prefers-color-scheme: light) {
+    body.rx[data-theme="auto"] {
+      background:
+        radial-gradient(120% 90% at 15% 0%, #dfe7f7 0%, #eef1f7 55%, #f6f7fa 100%),
+        var(--rx-canvas);
+    }
+  }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 28px 20px 80px; }
+  .top { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+  .top h1 { font: var(--rx-font-title); margin: 0; flex: 1; letter-spacing: var(--rx-tracking-title); }
+  .sec { margin-top: 26px; }
+  .sec > h2 {
+    font: var(--rx-font-status); text-transform: uppercase;
+    letter-spacing: var(--rx-tracking-caps); color: var(--rx-label-tertiary);
+    margin: 0 0 10px;
+  }
+  .demo {
+    padding: 16px;
+    border-radius: var(--rx-radius-panel);
+    border: 0.5px solid var(--rx-hairline);
+    background: var(--rx-surface-window);
+    -webkit-backdrop-filter: blur(12px) saturate(160%);
+    backdrop-filter: blur(12px) saturate(160%);
+    display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+  }
+  .demo.col { flex-direction: column; align-items: stretch; }
+  .demo.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
+  .swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
+  .sw { border-radius: 8px; overflow: hidden; border: 0.5px solid var(--rx-hairline); }
+  .sw i { display: block; height: 34px; }
+  .sw span { display: block; padding: 5px 8px; font: var(--rx-font-caption); color: var(--rx-label-secondary); }
+</style>
+</head>
+<body class="rx" data-theme="auto">
+<div class="wrap">
+
+  <div class="top">
+    <h1>RunX UI</h1>
+    <div class="rx-seg" id="theme-seg">
+      <button data-value="light">浅色</button>
+      <button data-value="dark">深色</button>
+      <button data-value="auto" class="on">跟随系统</button>
+    </div>
+  </div>
+  <p class="rx-caption">与桌面同一套令牌：Inter、语义色分层、blur(12px) 毛玻璃、同心圆角。挂在 <code class="rx-code" style="padding:1px 5px">.rx</code> 下面，不污染应用自己的样式。</p>
+
+  <!-- 排版 -->
+  <div class="sec">
+    <h2>排版</h2>
+    <div class="demo col">
+      <p class="rx-title">窗口标题 · 17px 600</p>
+      <p class="rx-subtitle">分区标题 · 15px 600</p>
+      <p class="rx-body">正文 13.5px。用语义样式而不是固定字号，换字号不会把行高打死；数字一律等宽 —— 日志行号、进度百分比不会左右跳。</p>
+      <p class="rx-caption">辅助说明 11.5px，用于「上次同步于 3 分钟前」这类信息。</p>
+      <p class="rx-status">状态 11px · 3 项待处理</p>
+      <p class="rx-section-label">Section label</p>
+    </div>
+  </div>
+
+  <!-- 按钮 -->
+  <div class="sec">
+    <h2>按钮</h2>
+    <div class="demo">
+      <button class="rx-btn primary">保存</button>
+      <button class="rx-btn">取消</button>
+      <button class="rx-btn soft">次要</button>
+      <button class="rx-btn plain">无边框</button>
+      <button class="rx-btn destructive">删除</button>
+      <button class="rx-btn" disabled>不可用</button>
+      <button class="rx-btn sm">小号</button>
+      <button class="rx-btn lg primary">大号</button>
+      <button class="rx-icon-btn" title="更多">⋯</button>
+      <div class="rx-btn-group">
+        <button class="rx-btn on">日</button><button class="rx-btn">周</button><button class="rx-btn">月</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 表单 -->
+  <div class="sec">
+    <h2>表单</h2>
+    <div class="demo col" style="gap:14px">
+      <div class="rx-field" style="max-width:280px">
+        <label>文件名</label>
+        <input class="rx-input" value="会议记录.md">
+        <span class="rx-hint">保存到 我的文档 / 笔记</span>
+      </div>
+      <div class="rx-field" style="max-width:280px">
+        <label>备注</label>
+        <textarea class="rx-textarea" rows="2">随便写点什么。</textarea>
+      </div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center">
+        <div class="rx-search" style="width:200px"><input class="rx-input" placeholder="搜索"></div>
+        <select class="rx-select" style="width:140px"><option>按修改时间</option><option>按名称</option></select>
+        <div class="rx-stepper"><button data-dir="-">−</button><input value="3"><button data-dir="+">+</button></div>
+      </div>
+      <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center">
+        <label class="rx-switch"><input type="checkbox" checked><span class="rx-track"></span><span class="rx-body">同步</span></label>
+        <label class="rx-switch accent"><input type="checkbox"><span class="rx-track"></span><span class="rx-body">用强调色</span></label>
+        <label class="rx-check"><input type="checkbox" checked><span class="rx-box"></span><span class="rx-body">记住我</span></label>
+        <label class="rx-radio"><input type="radio" name="r" checked><span class="rx-box"></span><span class="rx-body">选项一</span></label>
+        <label class="rx-radio"><input type="radio" name="r"><span class="rx-box"></span><span class="rx-body">选项二</span></label>
+      </div>
+      <input class="rx-slider" type="range" min="0" max="100" value="62" style="max-width:320px">
+    </div>
+  </div>
+
+  <!-- 容器 -->
+  <div class="sec">
+    <h2>容器 · 列表 · 表格</h2>
+    <div class="demo col" style="gap:0;padding:0;overflow:hidden">
+      <div class="rx-toolbar">
+        <button class="rx-btn sm">新建</button>
+        <button class="rx-icon-btn">↻</button>
+        <span class="rx-spacer"></span>
+        <span class="rx-status">3 项</span>
+      </div>
+      <div class="rx-split">
+        <div class="rx-sidebar">
+          <div class="rx-nav-item on"><span class="rx-dot"></span>笔记</div>
+          <div class="rx-nav-item">附件</div>
+          <div class="rx-nav-item">回收站</div>
+        </div>
+        <div class="rx-main" style="padding:8px 12px">
+          <div class="rx-list">
+            <div class="rx-row on">
+              <div class="rx-row-main">
+                <div class="rx-row-title">周会记录.md</div>
+                <div class="rx-row-sub">今天 09:41 · 4.2 KB</div>
+              </div>
+              <span class="rx-badge green"><span class="rx-dot"></span>已同步</span>
+            </div>
+            <div class="rx-row">
+              <div class="rx-row-main">
+                <div class="rx-row-title">发布清单.md</div>
+                <div class="rx-row-sub">昨天 18:02 · 1.1 KB</div>
+              </div>
+              <span class="rx-badge yellow">待处理</span>
+            </div>
+            <div class="rx-row">
+              <div class="rx-row-main">
+                <div class="rx-row-title">image.png</div>
+                <div class="rx-row-sub">3 天前 · 812 KB</div>
+              </div>
+              <span class="rx-badge">只读</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <table class="rx-table">
+        <thead><tr><th>名称</th><th>类型</th><th class="num">大小</th></tr></thead>
+        <tbody>
+          <tr><td>会议记录.md</td><td>Markdown</td><td class="num">4.2 KB</td></tr>
+          <tr><td>封面.png</td><td>图片</td><td class="num">812 KB</td></tr>
+          <tr><td>备份.tar</td><td>归档</td><td class="num">128 MB</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 标签页 -->
+  <div class="sec">
+    <h2>标签页</h2>
+    <div class="demo col" style="gap:12px">
+      <div class="rx-tabs">
+        <button class="rx-tab on" data-target="#p1">概览</button>
+        <button class="rx-tab" data-target="#p2">活动</button>
+        <button class="rx-tab" data-target="#p3">设置</button>
+      </div>
+      <div id="p1" class="rx-body">概览面板。点上面的标签切换。</div>
+      <div id="p2" class="rx-body" hidden>活动面板。</div>
+      <div id="p3" class="rx-body" hidden>设置面板。</div>
+    </div>
+  </div>
+
+  <!-- 反馈 -->
+  <div class="sec">
+    <h2>反馈</h2>
+    <div class="demo col" style="gap:14px">
+      <div class="rx-progress"><i style="width:62%"></i></div>
+      <div class="rx-progress indeterminate"><i></i></div>
+      <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+        <span class="rx-spinner"></span>
+        <span class="rx-body" style="flex:1">正在读取 3 个文件…</span>
+        <span class="rx-kbd">⌘</span><span class="rx-kbd">K</span>
+      </div>
+      <div class="rx-skeleton" style="width:60%"></div>
+      <div class="rx-skeleton" style="width:40%"></div>
+      <div class="rx-empty">这个目录还没有文件</div>
+    </div>
+  </div>
+
+  <!-- 覆盖层 -->
+  <div class="sec">
+    <h2>对话框 · 菜单 · Toast</h2>
+    <div class="demo">
+      <button class="rx-btn" id="d1">打开对话框</button>
+      <button class="rx-btn" id="d2">确认（危险）</button>
+      <button class="rx-btn" id="d3">输入框</button>
+      <button class="rx-btn" id="d4">菜单</button>
+      <button class="rx-btn" id="d5">Toast</button>
+    </div>
+  </div>
+
+  <!-- 令牌 -->
+  <div class="sec">
+    <h2>语义色</h2>
+    <div class="swatches">
+      <div class="sw"><i style="background:var(--rx-accent)"></i><span>accent</span></div>
+      <div class="sw"><i style="background:var(--rx-semantic-red)"></i><span>red · 破坏性</span></div>
+      <div class="sw"><i style="background:var(--rx-semantic-yellow)"></i><span>yellow · 警告</span></div>
+      <div class="sw"><i style="background:var(--rx-semantic-green)"></i><span>green · 成功</span></div>
+      <div class="sw"><i style="background:var(--rx-surface-sunken)"></i><span>surface · sunken</span></div>
+      <div class="sw"><i style="background:var(--rx-surface-hover)"></i><span>surface · hover</span></div>
+    </div>
+  </div>
+
+</div>
+<script src="runx-ui.js"></script>
+<script>
+  document.getElementById('theme-seg').addEventListener('rx:change', function (e) {
+    RX.theme(e.detail.value);
+  });
+  // 首次进入按当前主题把分段控件对齐
+  var cur = RX.theme();
+  document.querySelectorAll('#theme-seg button').forEach(function (b) {
+    b.classList.toggle('on', b.getAttribute('data-value') === cur);
+  });
+
+  document.getElementById('d1').onclick = function () {
+    RX.dialog({
+      title: '发现新版本',
+      message: 'RunX 0.9.2 修复了文件监听在删除目录后不释放句柄的问题。现在安装？',
+      actions: [{ id: 'ok', label: '安装', kind: 'primary' }, { id: 'later', label: '以后' }],
+    }).then(function (id) { RX.toast('你选了：' + (id || '关闭')); });
+  };
+  document.getElementById('d2').onclick = function () {
+    RX.confirm('删除 3 个文件？', '删除后无法恢复。', { okLabel: '删除', danger: true })
+      .then(function (ok) { RX.toast(ok ? '已删除' : '已取消'); });
+  };
+  document.getElementById('d3').onclick = function () {
+    RX.prompt('重命名', { value: '会议记录.md', label: '新名称' })
+      .then(function (v) { RX.toast(v === null ? '已取消' : '改成：' + v); });
+  };
+  document.getElementById('d4').onclick = function (e) {
+    RX.menu(e.currentTarget, [
+      { label: '复制', key: '⌘C' }, { label: '重命名', key: 'F2' },
+      { sep: true }, { label: '移到废纸篓', key: '⌘⌫', danger: true },
+    ]);
+  };
+  document.getElementById('d5').onclick = function () {
+    RX.toast('已保存到 我的文档');
+    setTimeout(function () { RX.toast('这一条是错误样式', { kind: 'error' }); }, 400);
+  };
+</script>
+</body>
+</html>

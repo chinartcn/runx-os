@@ -483,6 +483,317 @@
   }
 
   /* ═══════════════════════════════════════════════════════════════
+   * 3.5 对话框（文件选择 / 保存 / 提问）
+   *
+   * 应用想让用户挑一个文件时，它只发一个请求，路径由这里的人来选。这条边界
+   * 是整个设计里最值钱的部分：应用无法指定「读哪个文件」，只能等一个结果。
+   *
+   * 目录浏览走 /runx/rights/browse（服务端直接读盘）—— 这是**人**在看目录，
+   * 与应用的能力授权无关，所以用户在这里能走到任何地方。
+   * ═══════════════════════════════════════════════════════════════ */
+
+  var dlgQueue = [];
+  var dlgShowing = false;
+
+  function answerDialog(id, payload) {
+    var body = Object.assign({ id: id }, payload || {});
+    return req('/rights/dialog/answer', { method: 'POST', body: JSON.stringify(body) });
+  }
+
+  function dirOf(p) {
+    var s = String(p || '/');
+    var i = s.lastIndexOf('/');
+    if (i <= 0) return '/';
+    return s.slice(0, i);
+  }
+
+  function joinPath(dir, name) {
+    return (dir === '/' ? '' : dir.replace(/\/+$/, '')) + '/' + name;
+  }
+
+  function humanSize(n) {
+    if (!n) return '';
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(n < 10240 ? 1 : 0) + ' KB';
+    if (n < 1024 * 1024 * 1024) return (n / 1048576).toFixed(1) + ' MB';
+    return (n / 1073741824).toFixed(1) + ' GB';
+  }
+
+  /** 目录里的一条：图标用几何形状画，不赌字体 */
+  function entryIcon(type) {
+    var s = svgIcon(type === 'dir'
+      ? 'M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2h8.5A1.5 1.5 0 0 1 21 9.5v9A1.5 1.5 0 0 1 19.5 20h-15A1.5 1.5 0 0 1 3 18.5z'
+      : (type === 'link'
+        ? 'M10 13a5 5 0 0 0 7 0l2-2a5 5 0 0 0-7-7l-1 1M14 11a5 5 0 0 0-7 0l-2 2a5 5 0 0 0 7 7l1-1'
+        : 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5'), 17);
+    s.classList.add('rxrm-eico', type);
+    return s;
+  }
+
+  function messageDialog(r) {
+    var o = r.options || {};
+    var v = veil('dialog');
+    var box = el('div', 'rxrm-box small');
+    v.appendChild(box);
+
+    var head = el('div', 'rxrm-head');
+    var letter = String(r.app_label || r.app || '?').trim().charAt(0).toUpperCase();
+    head.appendChild(el('div', 'rxrm-ico letter', letter));
+    var htxt = el('div', 'rxrm-headtx');
+    htxt.appendChild(el('div', 'rxrm-title', r.title || '来自 ' + r.app_label));
+    htxt.appendChild(el('div', 'rxrm-sub', r.app_label + ' 想问你一件事'));
+    head.appendChild(htxt);
+    box.appendChild(head);
+
+    var body = el('div', 'rxrm-body');
+    if (r.message) body.appendChild(el('p', 'rxrm-msg', r.message));
+    box.appendChild(body);
+
+    var foot = el('div', 'rxrm-foot');
+    var btns = el('div', 'rxrm-btns');
+    var buttons = (o.buttons && o.buttons.length) ? o.buttons
+      : [{ id: 'ok', label: '确定', kind: 'primary' }, { id: 'cancel', label: '取消' }];
+
+    function done(payload, note) {
+      closeVeil(v);
+      answerDialog(r.id, payload).catch(function (e) { toast(e.message); });
+      if (note) toast(note);
+      dlgShowing = false;
+      nextDialog();
+    }
+
+    buttons.forEach(function (b) {
+      btns.appendChild(btn(b.label, b.kind || '', function () { done({ value: b.id }); }));
+    });
+    foot.appendChild(btns);
+    box.appendChild(foot);
+
+    function onKey(e) {
+      if (e.key === 'Escape') { document.removeEventListener('keydown', onKey); done({ cancelled: true }); }
+    }
+    document.addEventListener('keydown', onKey);
+    return v;
+  }
+
+  function fileDialog(r) {
+    var o = r.options || {};
+    var isSave = r.kind === 'save';
+    var multi = !!o.multiple;
+    var filters = (o.filters || []).map(function (f) {
+      return String(f).toLowerCase().replace(/^\./, '');
+    }).filter(Boolean);
+
+    var cur = o.startIn || '/';
+    var picked = [];             // 多选
+    var cursor = null;           // 单选：当前高亮的文件
+    var showAll = false;
+    var showHidden = false;
+
+    var v = veil('dialog');
+    var box = el('div', 'rxrm-box picker');
+    v.appendChild(box);
+
+    /* 头部 */
+    var head = el('div', 'rxrm-head');
+    var letter = String(r.app_label || r.app || '?').trim().charAt(0).toUpperCase();
+    head.appendChild(el('div', 'rxrm-ico letter', letter));
+    var htxt = el('div', 'rxrm-headtx');
+    htxt.appendChild(el('div', 'rxrm-title', r.title || (isSave ? '保存到…' : '打开文件')));
+    var sub = el('div', 'rxrm-sub');
+    sub.appendChild(el('span', null, r.app_label + ' 想让你'));
+    sub.appendChild(el('span', null, isSave ? '选择保存位置' : '选择一个文件'));
+    if (filters.length && !showAll) sub.appendChild(el('span', 'rxrm-fi', '仅 ' + filters.map(function (f) { return '.' + f; }).join(' / ')));
+    htxt.appendChild(sub);
+    head.appendChild(htxt);
+    var x = el('button', 'rxrm-x', '✕');
+    x.type = 'button';
+    x.title = '取消';
+    x.addEventListener('click', function () { done({ cancelled: true }); });
+    head.appendChild(x);
+    box.appendChild(head);
+
+    /* 路径栏 */
+    var bar = el('div', 'rxrm-pathbar');
+    var up = el('button', 'rxrm-up', '↑');
+    up.type = 'button';
+    up.title = '上一级';
+    up.addEventListener('click', function () { load(dirOf(cur)); });
+    bar.appendChild(up);
+    var pathText = el('div', 'rxrm-path-text');
+    pathText.title = cur;
+    bar.appendChild(pathText);
+    var tools = el('div', 'rxrm-tools');
+    if (filters.length) {
+      tools.appendChild(toggleChip('全部文件', function (on) { showAll = on; load(cur); }));
+    }
+    tools.appendChild(toggleChip('隐藏项', function (on) { showHidden = on; load(cur); }));
+    bar.appendChild(tools);
+    box.appendChild(bar);
+
+    /* 列表 */
+    var list = el('div', 'rxrm-list');
+    box.appendChild(list);
+
+    /* 底部 */
+    var foot = el('div', 'rxrm-foot picker-foot');
+    var left = el('div', 'rxrm-meta');
+    var nameInput = null;
+    if (isSave) {
+      nameInput = el('input', 'rxrm-input rxrm-name');
+      nameInput.placeholder = '文件名';
+      nameInput.value = o.defaultName || '';
+      left.appendChild(nameInput);
+    } else {
+      left.appendChild(el('span', 'rxrm-pickinfo', multi ? '可多选' : '未选择'));
+    }
+    foot.appendChild(left);
+    var btns = el('div', 'rxrm-btns');
+    btns.appendChild(btn('取消', '', function () { done({ cancelled: true }); }));
+    var okBtn = btn(isSave ? '保存' : (multi ? '选择' : '打开'), 'primary', function () { confirmPick(); });
+    btns.appendChild(okBtn);
+    foot.appendChild(btns);
+    box.appendChild(foot);
+
+    function toggleChip(label, onChange) {
+      var b = el('button', 'rxrm-chipbtn', label);
+      b.type = 'button';
+      b.addEventListener('click', function () {
+        var on = !b.classList.contains('on');
+        b.classList.toggle('on', on);
+        onChange(on);
+      });
+      return b;
+    }
+
+    function setInfo(text) {
+      var info = left.querySelector('.rxrm-pickinfo');
+      if (info) info.textContent = text;
+    }
+
+    function visible(e) {
+      if (!showHidden && e.hidden) return false;
+      if (e.type === 'dir') return true;
+      if (!filters.length || showAll) return true;
+      var lower = e.name.toLowerCase();
+      return filters.some(function (f) { return lower.slice(-(f.length + 1)) === '.' + f; });
+    }
+
+    function load(path) {
+      pathText.textContent = path;
+      pathText.title = path;
+      list.innerHTML = '';
+      list.appendChild(el('div', 'rxrm-empty', '正在读取…'));
+      req('/rights/browse?path=' + encodeURIComponent(path)).then(function (d) {
+        cur = d.path;
+        pathText.textContent = cur;
+        pathText.title = cur;
+        list.innerHTML = '';
+        var entries = (d.entries || []).filter(visible);
+        if (!entries.length) {
+          list.appendChild(el('div', 'rxrm-empty', '这个目录是空的（或都被过滤掉了）'));
+        }
+        entries.forEach(function (e) { list.appendChild(row(e)); });
+        // 保存框默认聚焦文件名，输入即输
+        if (isSave && nameInput) setTimeout(function () { nameInput.focus(); nameInput.select(); }, 30);
+      }, function (e) {
+        list.innerHTML = '';
+        list.appendChild(el('div', 'rxrm-empty', '打不开：' + e.message));
+      });
+    }
+
+    function row(e) {
+      var full = joinPath(cur, e.name);
+      var n = el('div', 'rxrm-entry');
+      n.appendChild(entryIcon(e.type));
+      var txt = el('div', 'rxrm-etx');
+      txt.appendChild(el('div', 'rxrm-ename', e.name));
+      var meta = [];
+      if (e.type === 'dir') meta.push('文件夹');
+      else if (e.size) meta.push(humanSize(e.size));
+      if (meta.length) txt.appendChild(el('div', 'rxrm-emeta', meta.join(' · ')));
+      n.appendChild(txt);
+      if (picked.indexOf(full) >= 0) n.classList.add('sel');
+
+      n.addEventListener('click', function () {
+        if (e.type === 'dir') { load(full); return; }
+        if (multi) {
+          var i = picked.indexOf(full);
+          if (i >= 0) picked.splice(i, 1); else picked.push(full);
+          n.classList.toggle('sel', i < 0);
+          setInfo(picked.length ? '已选 ' + picked.length + ' 个' : '未选择');
+        } else {
+          cursor = full;
+          Array.prototype.forEach.call(list.querySelectorAll('.rxrm-entry.sel'), function (m) { m.classList.remove('sel'); });
+          n.classList.add('sel');
+          if (isSave && nameInput) nameInput.value = e.name;
+          setInfo(e.name);
+        }
+      });
+      n.addEventListener('dblclick', function () {
+        if (e.type === 'dir') return load(full);
+        cursor = full;
+        confirmPick();
+      });
+      return n;
+    }
+
+    function confirmPick() {
+      if (isSave) {
+        var name = nameInput ? nameInput.value.trim() : '';
+        if (!name) { toast('给文件起个名字'); return; }
+        done({ path: joinPath(cur, name) }, '已选择保存位置');
+        return;
+      }
+      if (multi) {
+        if (!picked.length) { toast('还没有选择任何文件'); return; }
+        done({ paths: picked.slice() }, '已选择 ' + picked.length + ' 个');
+        return;
+      }
+      if (!cursor) { toast('先点选一个文件'); return; }
+      done({ paths: [cursor] }, '已选择');
+    }
+
+    function done(payload, note) {
+      closeVeil(v);
+      document.removeEventListener('keydown', onKey);
+      answerDialog(r.id, payload).catch(function (e) { toast(e.message); });
+      if (note) toast(note);
+      dlgShowing = false;
+      nextDialog();
+    }
+
+    function onKey(e) {
+      if (e.key === 'Escape') { e.stopPropagation(); done({ cancelled: true }); }
+      else if (e.key === 'Enter' && !(e.target && e.target.tagName === 'BUTTON')) confirmPick();
+    }
+    document.addEventListener('keydown', onKey);
+
+    load(cur);
+    return v;
+  }
+
+  function nextDialog() {
+    if (dlgShowing) return;
+    while (dlgQueue.length) {
+      var item = dlgQueue.shift();
+      var r = item && (item.request || item);
+      if (!r || !r.id) continue;
+      dlgShowing = true;
+      if (r.kind === 'message') messageDialog(r);
+      else fileDialog(r);
+      return;
+    }
+  }
+
+  function enqueueDialog(item) {
+    var r = item && (item.request || item);
+    if (!r || !r.id) return;
+    if (dlgQueue.some(function (x) { return (x.request || x).id === r.id; })) return;
+    dlgQueue.push(item);
+    nextDialog();
+  }
+
+  /* ═══════════════════════════════════════════════════════════════
    * 4. 菜单栏入口
    *
    * 不碰桌面的代码：桌面在渲染完成后会有 .rx-menubar-status 这个容器，
@@ -513,6 +824,28 @@
    * 5. 启动
    * ═══════════════════════════════════════════════════════════════ */
 
+  /**
+   * 应用写剪贴板时，尽力把它送进系统剪贴板。
+   *
+   * 浏览器只在「页面有焦点 + 有权限」时才允许 writeText，所以这里一定会
+   * 失败一部分情况（后台标签、手机、用户拒绝）。失败就不做，但**必须告诉
+   * 用户**：否则「应用说复制好了、实际没进系统剪贴板」是最难查的一类问题。
+   */
+  function mirrorClipboard(payload) {
+    var text = payload && payload.text ? String(payload.text) : '';
+    if (!text) return;
+    var who = (payload && (payload.app_label || payload.app)) || '应用';
+    if (!navigator.clipboard || !navigator.clipboard.writeText) {
+      toast(who + ' 写入了剪贴板（本浏览器不支持同步到系统）');
+      return;
+    }
+    navigator.clipboard.writeText(text).then(function () {
+      toast(who + ' 复制了 ' + text.length + ' 个字符');
+    }, function () {
+      toast(who + ' 写入了 RunX 剪贴板（未同步到系统：页面没有焦点或被拒绝）');
+    });
+  }
+
   function refreshStatus() {
     return req('/auth/status').then(function (s) {
       state.me = s;
@@ -529,6 +862,9 @@
       // 已经把事件通道接上，再补一次「进页面之前就已经在等」的请求
       return req('/rights/pending').then(function (d) {
         (d.requests || []).forEach(enqueue);
+        return req('/rights/dialog/pending').then(function (dd) {
+          (dd.requests || []).forEach(enqueueDialog);
+        }, function () { /* 没有对话框服务就跳过 */ });
       }, function () { /* 未登录就等事件 */ });
     });
 
@@ -537,6 +873,8 @@
     (function subscribe() {
       if (RunX.bus && RunX.bus.subscribe) {
         RunX.bus.subscribe('sys.rights.ask', function (m) { enqueue(m.payload); });
+        RunX.bus.subscribe('sys.dialog.open', function (m) { enqueueDialog(m.payload); });
+        RunX.bus.subscribe('sys.clipboard.write', function (m) { mirrorClipboard(m.payload); });
         return;
       }
       if (tries++ < 40) setTimeout(subscribe, 250);
@@ -571,5 +909,33 @@
     },
     /** 退出时撤销所有挂起请求，避免把「谁来决定」留给下一个人 */
     cancel: function () { return req('/auth/logout', { method: 'POST' }); },
+
+    /** 对话框：手动拉一次（事件丢了也能恢复）+ 直接回答 */
+    dialog: {
+      pending: function () {
+        return req('/rights/dialog/pending').then(function (d) {
+          (d.requests || []).forEach(enqueueDialog);
+          return d.requests || [];
+        });
+      },
+      answer: answerDialog,
+    },
+
+    /**
+     * 桌面（人）这一侧的剪贴板读写。应用那一侧要走 SDK 的授权。
+     * write 会同时在系统剪贴板与 RunX 剪贴板里各写一份 —— 能写进系统就写。
+     */
+    clipboard: {
+      read: function () { return req('/rights/clipboard'); },
+      write: function (text) {
+        return req('/rights/clipboard', { method: 'POST', body: JSON.stringify({ text: String(text) }) })
+          .then(function (r) {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              navigator.clipboard.writeText(String(text)).catch(function () { /* 尽力而为 */ });
+            }
+            return r;
+          });
+      },
+    },
   };
 })();

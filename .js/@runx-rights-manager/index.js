@@ -33,6 +33,8 @@ const fs = require('fs');
 const { createAccounts } = require('./accounts');
 const { createGrants, CAPS, assess } = require('./grants');
 const { createUac } = require('./uac');
+const { createDialog } = require('./dialog');
+const { createClipboard } = require('./clipboard');
 const { createBroker } = require('./broker');
 const session = require('./session');
 
@@ -45,6 +47,9 @@ let S = null;
 const OPEN_PREFIX = [
   API + '/auth/',
   API + '/desktop-assets/',
+  // 组件库的 CSS/JS/字体：应用页面在自己的源里引，不带 Cookie（SameSite=Lax），
+  // 要求登录的结果是「样式偶尔加载失败」。它们不含任何数据。
+  API + '/ui/',
   API + '/rights/rules',
   '/favicon.ico',
 ];
@@ -200,8 +205,25 @@ module.exports = {
       hasUi: () => os.bus.clients() > 0,
     });
 
+    /* 剪贴板：内核里的一份共享文本缓冲区，桌面尽力与系统剪贴板同步 */
+    const clipboard = createClipboard({ dir: stateDir, log });
+
+    /* 对话框：文件选择 / 保存 / 普通提问。答案不是枚举，所以不进 uac。 */
+    const dialog = createDialog({
+      waitMs: Number(process.env.RUNX_DIALOG_TIMEOUT) || 180000,
+      log,
+      publish: (event, payload) => os.bus.publish(event, 'rights', payload),
+      hasUi: () => os.bus.clients() > 0,
+      // startIn 白名单：应用只能把用户送到自己家或自己的沙箱
+      roots: (name) => {
+        const e = appEntry(name);
+        const cwd = (e && e.cwd) || path.join(root, 'apps', name);
+        return [path.join(cwd, (e && e.data_dir) || 'data'), cwd, require('os').homedir()];
+      },
+    });
+
     const broker = createBroker({
-      root, log, grants, uac,
+      root, log, grants, uac, dialog, clipboard,
       resolveApp,
       adminOn: () => adminStateOf().on,
       sandboxOf: (name) => {
@@ -241,8 +263,18 @@ module.exports = {
       log(line);
     }
 
+    /* 应用停止时收拾它的 watch：idle 回收是兜底，这里才是正路 —— 一个崩掉
+       的应用不该继续占着内核的 watch 句柄到五分钟。 */
+    try {
+      os.ipc.on('app:stopped', (name) => {
+        const n = broker.releaseApp(name);
+        if (n) log(`应用停止，关闭 ${n} 个 watch：${name}`);
+      });
+    } catch { /* 没有 ipc 通道就算了，idle 会兜住 */ }
+
     S = {
-      accounts, grants, uac, broker, currentUser, requireAdmin, loginPage,
+      accounts, grants, uac, dialog, clipboard, broker, currentUser, requireAdmin, loginPage,
+      publish: (event, payload) => os.bus.publish(event, 'rights', payload),
       adminStateOf, appOwner, note, audit, loopbackAdmin, resolveApp,
       json, err, stateDir,
     };
@@ -354,6 +386,7 @@ module.exports = {
 
     if (method === 'POST' && p === API + '/auth/logout') {
       S.uac.cancelAll('logout');
+      S.dialog.cancelAll('logout');
       return S.json(200, { ok: true }, { 'Set-Cookie': A.clearCookie() });
     }
 
@@ -466,6 +499,61 @@ module.exports = {
       });
     }
 
+    if (method === 'GET' && p === API + '/rights/dialog/pending') {
+      const c = S.currentUser(req);
+      if (!c) return S.err(401, 'AUTH_REQUIRED', '需要登录');
+      return S.json(200, { requests: S.dialog.list() });
+    }
+
+    if (method === 'POST' && p === API + '/rights/dialog/answer') {
+      const c = S.currentUser(req);
+      if (!c) return S.err(401, 'AUTH_REQUIRED', '需要登录');
+      return Promise.resolve(ctx.readJson().catch(() => ({}))).then((b) => {
+        const r = S.dialog.answer(String(b.id || ''), {
+          uid: c.user.id,
+          cancelled: !!b.cancelled,
+          paths: b.paths, path: b.path, value: b.value,
+        });
+        if (!r.ok) return S.err(r.code || 400, 'ANSWER_FAILED', r.message);
+        S.note(`${c.user.name} 回答对话框 ${r.cancelled ? '（取消）' : (r.path || r.value || '')}`);
+        return S.json(200, r);
+      });
+    }
+
+    /* 文件选择器的目录浏览。这是**人**在看目录，不是应用：权限来自登录会话，
+       与应用的能力授权无关。 */
+    if (method === 'GET' && p === API + '/rights/browse') {
+      const c = S.currentUser(req);
+      if (!c) return S.err(401, 'AUTH_REQUIRED', '需要登录');
+      if (url.searchParams.get('roots') === '1') return S.json(200, { roots: browseRoots() });
+      try {
+        return S.json(200, browseDir(url.searchParams.get('path') || ''));
+      } catch (e) {
+        return S.err(e.code === 'ENOENT' ? 404 : 400, e.code || 'BROWSE_FAILED', e.message);
+      }
+    }
+
+    /* 桌面侧的剪贴板读写：人自己的剪贴板，不需要应用授权 */
+    if (p === API + '/rights/clipboard') {
+      const c = S.currentUser(req);
+      if (!c) return S.err(401, 'AUTH_REQUIRED', '需要登录');
+      if (method === 'GET') {
+        const it = S.clipboard.read();
+        return S.json(200, { item: it, history: S.clipboard.history(10).entries });
+      }
+      if (method === 'POST') {
+        return Promise.resolve(ctx.readJson().catch(() => ({}))).then((b) => {
+          try {
+            const r = S.clipboard.write({ text: b.text, by: c.user.id, app: 'desktop' });
+            return S.json(200, r);
+          } catch (e) {
+            return S.err(e.code === 'ETOOBIG' ? 413 : 422, e.code || 'CLIP_FAILED', e.message);
+          }
+        });
+      }
+      return S.err(405, 'METHOD_NOT_ALLOWED', '不支持的方法');
+    }
+
     if (method === 'GET' && p === API + '/rights/audit') {
       const c = S.currentUser(req);
       if (!c) return S.err(401, 'AUTH_REQUIRED', '需要登录');
@@ -496,6 +584,67 @@ module.exports = {
           });
         return out;
       });
+    }
+
+    /** 文件选择器的「位置」列表：家目录、应用目录、可移动介质 */
+    function browseRoots() {
+      const os = require('os');
+      const out = [{ label: '主目录', path: os.homedir() }];
+      const apps = (os_readState('apps.json', { apps: [] }) || { apps: [] }).apps || [];
+      for (const a of apps) {
+        if (a.cwd) out.push({ label: a.display_name || a.name, path: a.cwd });
+      }
+      for (const p of ['/sdcard', '/storage/emulated/0', '/tmp', '/']) {
+        try { if (fs.statSync(p).isDirectory()) out.push({ label: p, path: p }); } catch { /* 不存在 */ }
+      }
+      return out;
+    }
+
+    /** 内核状态读取的薄封装：onInit 里的 os 在 onRequest 里不可见，这里补一条 */
+    function os_readState(name, dflt) {
+      try {
+        const f = path.join(S.stateDir, name);
+        return JSON.parse(fs.readFileSync(f, 'utf8'));
+      } catch { return dflt; }
+    }
+
+    /**
+     * 列一个目录（给文件选择器用）。
+     *
+     * 与 fs.list 的区别：这是**人**在浏览，不需要授权，也不做 path 白名单 ——
+     * 用户在自己的文件选择器里应该能走到任何地方。上限 2000 条，超大目录
+     * （如 /usr/bin）不至于把浏览器卡死。
+     */
+    function browseDir(raw) {
+      const os = require('os');
+      let p = String(raw || '');
+      if (!p) p = os.homedir();
+      if (p === '~' || p.startsWith('~/')) p = os.homedir() + p.slice(1);
+      p = path.resolve(p);
+      const st = fs.statSync(p);   // ENOENT 抛出去，前端显示「不存在」
+      if (!st.isDirectory()) {
+        return { path: p, parent: path.dirname(p), is_dir: false, entries: [] };
+      }
+      const all = fs.readdirSync(p, { withFileTypes: true });
+      const entries = [];
+      for (const d of all) {
+        const full = path.join(p, d.name);
+        let s2 = null;
+        try { s2 = fs.lstatSync(full); } catch { /* 权限不足 */ }
+        entries.push({
+          name: d.name,
+          type: d.isDirectory() ? 'dir' : (d.isSymbolicLink() ? 'link' : 'file'),
+          size: s2 ? s2.size : 0,
+          mtime: s2 ? s2.mtimeMs : 0,
+          hidden: d.name.startsWith('.'),
+        });
+        if (entries.length >= 2000) break;
+      }
+      entries.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : (a.type === 'dir' ? -1 : 1)));
+      return {
+        path: p, parent: p === '/' ? '/' : path.dirname(p), is_dir: true,
+        entries, truncated: all.length > 2000,
+      };
     }
 
     function handleSdk(r, u, cx) {
@@ -547,10 +696,33 @@ module.exports = {
         'fs.mkdir': () => B.mkdir(app, uid, b.path, b),
         'fs.remove': () => B.remove(app, uid, b.path, b),
         'fs.copy': () => B.copy(app, uid, b.from, b.to, b),
+        'fs.readRange': () => B.readRange(app, uid, b),
+        'fs.writeRange': () => B.writeRange(app, uid, b),
+        'fs.watch': () => B.watch(app, uid, b),
+        'fs.poll': () => Promise.resolve(B.poll(app, b)),
+        'fs.unwatch': () => Promise.resolve(B.unwatch(app, b)),
         'proc.spawn': () => B.spawn(app, uid, b),
         'proc.status': () => Promise.resolve(B.procStatus(b.pid)),
         'proc.kill': () => Promise.resolve(B.procKill(b.pid, b.signal)),
+        'proc.write': () => Promise.resolve(B.procWrite(b.pid, b)),
+        'proc.end': () => Promise.resolve(B.procEnd(b.pid)),
         'net.fetch': () => B.fetch(app, uid, b),
+        // 三个 dialog 方法名就是意图本身：kind 由服务端定，不让请求体覆盖
+        // （否则应用可以把 save 声明成 open，把「要写哪」藏起来）
+        'dialog.open': () => B.dialog(app, uid, Object.assign({}, b, { kind: 'open' })),
+        'dialog.save': () => B.dialog(app, uid, Object.assign({}, b, { kind: 'save' })),
+        'dialog.message': () => B.dialog(app, uid, Object.assign({}, b, { kind: 'message' })),
+        'clipboard.read': () => B.clipboardRead(app, uid),
+        'clipboard.write': () => B.clipboardWrite(app, uid, b).then((r) => {
+          // 让桌面把它镜像到系统剪贴板（尽力而为，失败只会 toast 一句）
+          try {
+            S.publish('sys.clipboard.write', {
+              app: app.name, app_label: app.label,
+              text: String(b.text == null ? '' : b.text), size: r.size, seq: r.seq,
+            });
+          } catch { /* 广播失败不影响写入结果 */ }
+          return r;
+        }),
         'sys.info': () => B.info(app, uid),
       };
       const key = area + '.' + op;

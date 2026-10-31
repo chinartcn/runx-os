@@ -135,6 +135,12 @@
   --surface-active:  rgba(0, 0, 0, 0.10);
   --surface-selected: var(--accent-soft);
 
+  /* 应用画布：窗口内容区（iframe 下方）的底色。
+     应用页面通常把 body 设成 transparent —— 它的底色就是这一层。
+     写死 #fff 的话，暗色主题下应用的白字会落在白底上（看不见）。
+     所以它必须跟主题走：亮色纯白，暗色近黑。 */
+  --canvas: #ffffff;
+
   /* 描边：材质之间靠细描边分界，而不是靠重阴影 */
   --hairline:        rgba(0, 0, 0, 0.11);        /* 分割线 */
   --hairline-strong: rgba(0, 0, 0, 0.18);
@@ -197,6 +203,8 @@
   --surface-active: rgba(255, 255, 255, 0.15);
   --surface-selected: var(--accent-soft);
 
+  --canvas: #16161a;   /* 应用画布：近黑但不是纯黑，跟窗口主体一族 */
+
   --hairline:        rgba(255, 255, 255, 0.13);
   --hairline-strong: rgba(255, 255, 255, 0.22);
   --stroke-control:  rgba(255, 255, 255, 0.16);
@@ -250,6 +258,8 @@
     --surface-hover:  rgba(255, 255, 255, 0.085);
     --surface-active: rgba(255, 255, 255, 0.15);
     --surface-selected: var(--accent-soft);
+
+    --canvas: #16161a;
 
     --hairline:        rgba(255, 255, 255, 0.13);
     --hairline-strong: rgba(255, 255, 255, 0.22);
@@ -544,6 +554,7 @@
     --surface-window: rgba(252, 252, 254, 0.96);
     --surface-chrome: rgba(252, 252, 254, 0.94);
     --surface-card: rgba(255, 255, 255, 0.98);
+    --canvas: #ffffff;
   }
   /* 深色高对比：手动深色 与 系统深色的自动主题，两份同样要一致 */
   #runx-desktop[data-theme="dark"],
@@ -556,6 +567,7 @@
     --surface-window: rgba(20, 20, 24, 0.96);
     --surface-chrome: rgba(20, 20, 24, 0.94);
     --surface-card: rgba(255, 255, 255, 0.12);
+    --canvas: #000000;
   }
 }
 

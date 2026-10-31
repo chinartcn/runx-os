@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "name": "demo",
+  "version": "1.0.0",
+  "type": "node",
+  "entry": "app.js",
+  "port": 3470,
+  "display_name": "示例",
+  "icon": "public/icon.svg",
+  "restart": "on-failure",
+  "autostart": false,
+  "data_dir": "data",
+  "permissions": [
+    "fs.read:./**",
+    "fs.write:./data/**",
+    "fs.watch:./**",
+    "proc.spawn:/usr/bin/tr",
+    "dialog.open",
+    "clipboard.read",
+    "clipboard.write",
+    "sys.info"
+  ],
+  "description": "RunX 示例应用：文件授权、监听、流式读取、进程 stdin、剪贴板，以及 @runx-ui 组件库"
+}
