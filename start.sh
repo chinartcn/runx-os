@@ -32,7 +32,6 @@ if [ -z "${PORT:-}" ] && [ -f "$ROOT/server.json" ]; then
 fi
 PORT="${PORT:-3000}"
 APP_PORT=3460
-APP_CWD="$(cd "$ROOT/apps/term" && pwd)"
 
 # 守护重启参数（可用环境变量覆盖）
 NO_GUARD="${NO_GUARD:-0}"
@@ -46,34 +45,11 @@ log() { printf '%s %s\n' "$(date '+%H:%M:%S')" "$*"; }
 # 生成运行时状态目录
 mkdir -p "$ROOT/var/runx"
 
-# 1) 应用登记（绝对 cwd，避免 supervisor 找不到工作目录）
-#    与 term/appex.json 保持一致；env 经 appex.json → os.spawn 透传。
-cat > "$ROOT/var/runx/apps.json" <<EOF
-{
-  "schema": 1,
-  "apps": [
-    {
-      "name": "term",
-      "type": "node",
-      "display_name": "终端",
-      "icon": "icon.svg",
-      "cmd": "node app.js",
-      "cwd": "$APP_CWD",
-      "port": $APP_PORT,
-      "autostart": true,
-      "restart": "on-failure",
-      "restart_delay_ms": 1000,
-      "restart_max": 5,
-      "restart_window_ms": 60000,
-      "data_dir": "data",
-      "version": "1.0.0",
-      "description": "RunX 真实交互式终端（script 伪 PTY + xterm.js，零原生依赖）",
-      "installed_at": $(date +%s)000,
-      "env": { "TERM_SHELL_ARGS": "--norc --noprofile" }
-    }
-  ]
-}
-EOF
+# 1) 应用登记：扫描 apps/ 下所有自带/已装应用，重建 var/runx/apps.json。
+#    以 apps/ 目录为唯一真相来源（PaX 安装/卸载都直接操作该目录下的子目录），
+#    所以内置的 store / runx-dev / demo 会随仓库自动登记，用户装的应用重启也不丢。
+#    字段映射与 PaX 的 buildEntry 一致；已存在条目的 installed_at 会被保留。
+node "$ROOT/bin/seed-apps.js"
 
 # 2) 桌面布局（图标 / 壁纸 / 任务栏）
 #    注意：不要覆盖已存在的 desktop.json —— 客户端会把图标位置、主题、壁纸
@@ -87,7 +63,8 @@ cat > "$ROOT/var/runx/desktop.json" <<'EOF'
   "theme": "auto",
   "grid": { "cell": 96, "gap": 8 },
   "icons": [
-    { "id": "term", "app": "term", "x": 1, "y": 1, "label": "终端" }
+    { "id": "term", "app": "term", "x": 1, "y": 1, "label": "终端" },
+    { "id": "store", "app": "store", "x": 2, "y": 1, "label": "应用商店" }
   ],
   "widgets": [],
   "taskbar": { "position": "bottom", "pinned": [], "show_clock": true },

@@ -1,0 +1,10 @@
+name = "runx-root-redirect"
+main = "worker.js"
+compatibility_date = "2024-09-23"
+
+# 只接管根域（apex）。子域 api/store/docs 各自有独立站点/Worker，不受影响。
+routes = [
+  "rtcnnavext.de5.net/*"
+]
+
+# 部署用 CLOUDFLARE_API_TOKEN 环境变量传入，不写进仓库。

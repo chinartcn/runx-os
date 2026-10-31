@@ -7,10 +7,10 @@
   "description": "五个标签页对应五项能力。页面本身用 runx-ui 写成，没有一行自己的按钮样式。\n\n错误分三层返回：code（机器读）、人话（给用户看）、hint（下一步怎么办）。主题跟着桌面走，窗口内外是一块连续的画布。",
   "category": "utility",
   "author": "runx",
-  "homepage": "https://github.com/chinartcn/runx-os",
-  "repo": "https://github.com/chinartcn/runx-os",
+  "homepage": "https://github.com/chinartcn/runx-examples",
+  "repo": "https://github.com/chinartcn/runx-examples",
   "license": "MIT",
-  "icon": "https://raw.githubusercontent.com/chinartcn/runx-os/main/apps/demo/public/icon.svg",
+  "icon": "https://raw.githubusercontent.com/chinartcn/runx-examples/main/apps/demo/public/icon.svg",
   "permissions": [
     "fs.read:./**",
     "fs.write:./data/**",
@@ -24,8 +24,8 @@
   "size": 4194304,
   "source": {
     "type": "github",
-    "url": "https://github.com/chinartcn/runx-os",
-    "download": "https://github.com/chinartcn/runx-os/archive/refs/heads/main.tar.gz",
+    "url": "https://github.com/chinartcn/runx-examples",
+    "download": "https://github.com/chinartcn/runx-examples/archive/refs/heads/main.tar.gz",
     "subdir": "apps/demo"
   }
 }

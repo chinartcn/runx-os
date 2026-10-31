@@ -39,3 +39,4 @@ site/www/assets/
 # wrangler 的本地缓存
 site/www/.wrangler/
 site/store/.wrangler/
+site/redirect/.wrangler/
