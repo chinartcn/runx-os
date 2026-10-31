@@ -404,9 +404,11 @@
     var lh = window.innerHeight;
     if (vv && vv.width && vv.height) {
       var s = vv.scale || 1;
-      var w = vv.width * s;          // 换算回布局 CSS 像素
-      var h = vv.height * s;
-      return { w: Math.min(w, lw), h: Math.min(h, lh) };
+      // 乘回 scale 才是布局尺寸（放大时 vv 只有布局的一半）。
+      // 用 max(1, s) 而不是直接乘：有的浏览器把 meta initial-scale 也算进
+      // vv.scale，此时 vv.width 已经是布局宽，直接乘反而会把桌面算窄。
+      var k = s > 1 ? s : 1;
+      return { w: Math.min(vv.width * k, lw), h: Math.min(vv.height * k, lh) };
     }
     return { w: lw, h: lh };
   }
@@ -433,9 +435,7 @@
    */
   function zoomWithKeyboard() {
     if (!visualZoomed()) return false;
-    var vv = window.visualViewport;
-    var s = vv.scale || 1;
-    var h = (vv.height || 0) * s;
+    var h = physViewport().h;          // 已换算回布局高度
     var lh = window.innerHeight || 0;
     return !!(lh > 0 && h > 0 && h < lh - 120);
   }
