@@ -1,0 +1,30 @@
+{
+  "name": "demo",
+  "slug": "demo",
+  "version": "1.0.0",
+  "display_name": "示例",
+  "summary": "RunX 示例应用：文件选择器、文件监听、大文件流式、子进程 stdin、剪贴板",
+  "description": "五个标签页对应五项能力。页面本身用 runx-ui 写成，没有一行自己的按钮样式。\n\n错误分三层返回：code（机器读）、人话（给用户看）、hint（下一步怎么办）。主题跟着桌面走，窗口内外是一块连续的画布。",
+  "category": "utility",
+  "author": "runx",
+  "homepage": "https://github.com/chinartcn/runx-os",
+  "repo": "https://github.com/chinartcn/runx-os",
+  "license": "MIT",
+  "icon": "https://raw.githubusercontent.com/chinartcn/runx-os/main/apps/demo/public/icon.svg",
+  "permissions": [
+    "fs.read:./**",
+    "fs.write:./data/**",
+    "fs.watch:./**",
+    "dialog.open",
+    "clipboard.read",
+    "clipboard.write",
+    "sys.info"
+  ],
+  "sha256": "",
+  "size": 4194304,
+  "source": {
+    "type": "github",
+    "url": "https://github.com/chinartcn/runx-os",
+    "download": "https://github.com/chinartcn/runx-os/archive/refs/heads/main.tar.gz"
+  }
+}
