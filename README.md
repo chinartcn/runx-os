@@ -4,6 +4,8 @@
 
 > 零运行时依赖。不需要 `npm install`、不需要编译原生模块。只要一台装了 Node.js 的机器（手机 / 平板 / 树莓派 / 服务器均可），`node server.js` 就能起来。
 
+**在线站点**：[官网](https://www.rtcnnavext.de5.net/) · [文档](https://docs.rtcnnavext.de5.net/) · [应用商店](https://store.rtcnnavext.de5.net/)
+
 ---
 
 ## 与 NavExt 版本的关系
@@ -111,7 +113,11 @@ RunX OS
 │   ├── term/        RunX 真实交互式终端（script 伪 PTY + xterm.js）
 │   └── demo/        示例应用：五项能力的活文档（对话框 / 剪贴板 / 监听 / 流式 / stdin）
 ├── var/runx/        运行时状态（apps.json / desktop.json / logs），gitignore
-└── docs/            设计文档（RunX.OS.Termux.md / RunX.UI.md）
+├── docs/            设计文档（RunX.OS.Termux.md / RunX.UI.md）
+└── site/            线上站点（官网 / 文档站 / 应用商店，Cloudflare）
+    ├── www/         官网首页（静态 + runx-ui）        → www.rtcnnavext.de5.net
+    ├── docs/        文档站（VitePress）                → docs.rtcnnavext.de5.net
+    └── store/       应用商店（Worker + D1 + KV）        → store. / api. / api.user.
 ```
 
 **扩展系统**：每个扩展是 `index.js`（服务端钩子）+ `client.js`（注入浏览器）+ `js.json`（配置 schema）+ `mod.json`（标记 `core:true`）。内核在 `/api/*` 之外预留 `/runx` 前缀给扩展 REST。
@@ -636,6 +642,91 @@ ETag 304 协商。内联的 CSS 在导出前会把相对 `url()` 改写成绝对
 > 结果就是 Ctrl+C 后 trap 不跑，用户得再按一次。也不能用 `wait "$SRV" &`
 > （后台子 shell 里 `$SRV` 不是它的孩子，会报 `is not a child of this shell`）。
 > 正确做法是主 shell 用 `sleep` 短轮询探活：`sleep` 是前台命令、能被信号立刻打断。
+
+---
+
+## 线上站点（site/）
+
+仓库里的 `site/` 部署出三个站点。它们不进内核 —— 内核的硬约束是零依赖，
+而站点需要构建工具、CDN 和数据库。
+
+| 目录 | 部署到 | 域名 | 技术 |
+|---|---|---|---|
+| `site/www/` | Cloudflare Pages | www.rtcnnavext.de5.net | 静态 HTML + runx-ui |
+| `site/docs/` | Cloudflare Pages | docs.rtcnnavext.de5.net | VitePress |
+| `site/store/` | Cloudflare Worker | store. / api. / api.user.rtcnnavext.de5.net | Worker + D1 + KV |
+
+### 应用商店
+
+> 极致白嫖，按需驱动。零服务器成本（Cloudflare 免费全家桶），去中心化存储
+> （开发者自带干粮），被动式更新（没有定时轮询）。
+
+**商店不存包** —— D1 只放元数据（详情、图标、权限、SHA、下载量），
+包在开发者自己的 GitHub / npm / 静态托管上。开发者填一个 `meta.json` 地址，
+点「一键同步」，Worker 拉下来写入 D1、清 KV 缓存，瞬间全网生效。
+
+`meta.json` **沿用 `appex.json` 的字段** —— 开发者不用学第二套格式。
+
+三个要点：
+
+- **权限变了要重新弹 UAC。** `meta.json` 的 `permissions` 就是 RunX 的能力字符串数组。
+  同步时 Worker 比对旧值，通过 `permissions_changed` 告诉前端，
+  前端据此决定安装时要不要重新走一遍审批。
+- **SHA 强校验。** 包哈希由开发者提供；开发者常常不提供，
+  此时自动退回比对商店自己算的 `meta_sha256`（判断「我看到的详情是不是最新的」）。
+- **死链自净。** 下载 404 自动上报，连续两次失败才去问上游 API：
+  仓库真没了就下架，API 抽风就不动 —— 锅甩给大厂。
+
+代理池在源站拉不动时自动轮询 GitHub 镜像；全挂了会列出**每一次尝试**，
+并区分「源仓库不存在」还是「GitHub 抽风」。
+
+**允许自行配置软件包源。** 商店不垄断分发 —— 开发者可以只用自己的 GitHub Release，
+用户可以在 RunX OS 里填自己的镜像前缀。商店只做指路明灯，不替源站背书。
+
+源码 MIT，**绝对透明可信** —— 你可以直接拿去自己美化。
+
+#### 从商店装到 RunX OS
+
+```
+商店面板点「安装」
+  → @runx-store  取下载地址 + source_subdir，套一层 /api/proxy
+  → @runx-pax     下载 → 安全解包 → 定位应用 → 落盘 → 写 apps.json
+  → supervisor    按 appex.json 起进程，套上权限围栏
+```
+
+四道坎，每道都踩过：
+
+- **仓库归档顶层不是应用。** GitHub 下载到的是 `runx-os-main/apps/demo/appex.json`，
+  顶层是仓库名。只认「根目录有 appex.json」的话，**每个 GitHub 源的应用都装不上**。
+  解决办法是 `meta.json` 里的 `source.subdir`（如 `"apps/demo"`）——
+  内核按**路径后缀**匹配，所以开发者不用知道那层仓库目录叫什么。
+  不写也能装：包里只有一个 `appex.json` 时自动命中；有两个以上就报错并**列出候选**，
+  绝不替人猜着装。
+- **包里没有 node_modules。** tarball 里没有依赖（`.gitignore` 掉了），
+  应用第一行 `require('@runx/sdk')` 就是 MODULE_NOT_FOUND。
+  内核在 `<root>/node_modules/@runx/` 下挂软链指向 `packages/`，
+  Node 的解析链 `apps/<name>` → `apps` → `<root>` 正好命中。
+  放根上而不是应用目录里 —— 应用目录要过 `validateDir`，那里软链是被拒绝的。
+- **装完要能跑。** 远程装的包同样走 `safeExtractTar`：软链、绝对路径、`../` 一律拒。
+  下载有 64MB 上限。
+- **转发要打对实例。** 商店装应用是「内核向自己发 HTTP」。
+  端口必须从 `ctx.port` / 请求 `Host` 头取 —— 写死 3000 会在同机跑着第二个
+  RunX 时打到别人家去，症状是「装不上，报的错跟安装八竿子打不着」。
+
+### 部署
+
+```bash
+export CLOUDFLARE_API_TOKEN=...      # 见 .secrets/.env（不入库）
+export CLOUDFLARE_ACCOUNT_ID=...
+
+node site/sync-assets.js             # 拷贝组件库与字体到站点目录
+
+cd site/docs && npm run docs:build && npx wrangler pages deploy .vitepress/dist --project-name=runx-docs --branch=main
+cd site/www  && npx wrangler pages deploy . --project-name=runx-www --branch=main
+cd site/store && npm run db:init && npm run deploy
+```
+
+细节见 [`site/README.md`](site/README.md) 与 [`site/store/README.md`](site/store/README.md)。
 
 ---
 

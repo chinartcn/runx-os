@@ -1,0 +1,10 @@
+{
+  "name": "应用商店（RunX 扩展）",
+  "description": "浏览并安装 RunX 应用。商店只存元数据与校验值，包在开发者自己的源上。",
+  "version": "1.0.0",
+  "author": "chinartcn",
+  "enabled": true,
+  "core": true,
+  "order": 65,
+  "requires": ["@runx-desktop", "@runx-pax"]
+}

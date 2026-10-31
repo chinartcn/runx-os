@@ -6,6 +6,7 @@
   "@runx-supervisor",
   "@runx-node-safety",
   "@runx-pax",
+  "@runx-store",
   "@runx-mounts",
   "@runx-event-bus",
   "@runx-desktop",

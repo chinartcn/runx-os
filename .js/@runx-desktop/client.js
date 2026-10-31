@@ -2575,6 +2575,10 @@
           closeStartMenu();
           if (window.RunX && RunX.monitor) RunX.monitor.open();
         } },
+      { label: '应用商店', glyph: 'package', act: function () {
+          closeStartMenu();
+          if (window.RunX && RunX.store) RunX.store.open();
+        } },
       { label: '桌面设置…', glyph: 'settings', key: '⌘,', act: openSettings },
       { sep: true },
       { label: '隐藏 ' + name, key: '⌘H', disabled: disabled, act: function () { hideWindow(activeId); } },

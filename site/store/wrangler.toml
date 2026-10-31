@@ -1,0 +1,43 @@
+name = "runx-store"
+main = "src/index.js"
+compatibility_date = "2025-05-05"
+
+# 商店是同一个 Worker 跑三个域名：
+#   store.rtcnnavext.de5.net  → 商店前端（根路径）
+#   api.rtcnnavext.de5.net    → 公共 API
+#   api.user.rtcnnavext.de5.net → 开发者 API（登录 / 上架 / 更新）
+# 按 hostname 分流，少一次部署、少一份账单。
+
+workers_dev = true
+
+[[routes]]
+pattern = "store.rtcnnavext.de5.net"
+custom_domain = true
+
+[[routes]]
+pattern = "api.rtcnnavext.de5.net"
+custom_domain = true
+
+[[routes]]
+pattern = "api.user.rtcnnavext.de5.net"
+custom_domain = true
+
+# D1：应用元数据、开发者账号、会话、下载流水、死链探测
+[[d1_databases]]
+binding = "DB"
+database_name = "runx-store"
+database_id = "8cef7168-c02b-4b3b-9edc-73bef5c2b85f"
+
+# KV：全局索引缓存 + 冷备份（挡住 90% 的 D1 读）
+[[kv_namespaces]]
+binding = "CACHE"
+id = "470e726891be455a8854e77bb6af0f0b"
+
+# 每天凌晨把 D1 打包成 index.json
+[triggers]
+crons = ["0 3 * * *"]
+
+[vars]
+STORE_NAME = "RunX Store"
+# 代理池：外部包下载失败时按序轮询
+MIRRORS = "https://gh-proxy.org/,https://ghproxy.net/,https://ghfast.top/"

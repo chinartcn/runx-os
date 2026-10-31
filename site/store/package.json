@@ -1,0 +1,21 @@
+{
+  "name": "runx-store",
+  "version": "1.0.0",
+  "description": "RunX Store · Cloudflare Worker（D1 + KV + R2）",
+  "main": "index.js",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:init": "wrangler d1 execute runx-store --remote --file=migrations/0001_init.sql",
+    "db:local": "wrangler d1 execute runx-store --local --file=migrations/0001_init.sql",
+    "db:migrate": "wrangler d1 execute runx-store --remote --file=migrations/0002_source_subdir.sql"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "type": "module",
+  "devDependencies": {
+    "wrangler": "^4.156.0"
+  },
+  "private": true
+}

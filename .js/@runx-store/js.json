@@ -1,0 +1,18 @@
+{
+  "scripts": "client.js",
+  "styles": "styles.css",
+  "config": {
+    "api_base": {
+      "type": "string",
+      "label": "商店 API 地址",
+      "description": "RunX Store 的公共 API 根地址。留空则用内置的官方地址；自建商店时改成自己的。",
+      "default": "https://api.rtcnnavext.de5.net"
+    },
+    "proxy_download": {
+      "type": "boolean",
+      "label": "经商店代理下载",
+      "description": "开启后下载走商店的镜像代理池 —— 源站拉不动时会自动轮换 GitHub 镜像。关闭则直连开发者源。",
+      "default": true
+    }
+  }
+}

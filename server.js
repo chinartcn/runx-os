@@ -2220,6 +2220,10 @@ function makeExtCtx(app, ext, base, req) {
     extId: ext.id,
     extDir: ext.dir,
     root: app.cfg ? app.cfg.root : '',
+    // 内核自己监听的端口。扩展要「回调内核」（装应用转发、推事件总线）
+    // 时必须用它 —— 写死 3000 或只认 process.env.PORT 都会在同机跑着
+    // 第二个实例时打到别人家去。
+    port: (app.cfg && app.cfg.port) || Number(process.env.PORT) || 3000,
     configPath: app.configPath,
     config: Object.assign({}, ext.config.values),
     configSchema: ext.config.fields.slice(),

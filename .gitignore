@@ -10,6 +10,12 @@
 # 依赖（本项目零运行时依赖，无需 node_modules）
 node_modules/
 
+# 凭证（Cloudflare Token / R2 密钥）—— 绝不入库
+/.secrets/
+.env
+.env.*
+!.env.example
+
 # 示例应用的运行时数据（由 /api/seed 现生成，含一个 4MB 的假大文件）
 /apps/demo/data/
 
@@ -17,3 +23,16 @@ node_modules/
 .DS_Store
 .idea/
 *.swp
+
+# 站点构建产物与依赖
+# 注意：gitignore 不支持行尾注释 —— 规则后面写了中文说明，整行会被忽略。
+# 说明要写在上一行。
+site/docs/node_modules/
+site/docs/.vitepress/dist/
+site/docs/.vitepress/cache/
+site/store/node_modules/
+# 从 packages/runx-ui 拷贝的样式与脚本（构建时重新拷，不入库）
+site/www/assets/
+# wrangler 的本地缓存
+site/www/.wrangler/
+site/store/.wrangler/

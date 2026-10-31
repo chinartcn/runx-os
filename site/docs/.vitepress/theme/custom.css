@@ -1,0 +1,121 @@
+/**
+ * 文档站配色。
+ *
+ * 令牌值逐字搬自桌面 tokens.css 与组件库 runx-ui.css ——
+ * 官网、文档站、桌面、组件库，四处必须是同一个蓝色、同一个 Inter。
+ * 差一个色值，用户就会觉得「这是两个产品」。
+ */
+
+/* Inter 可变字体：与桌面、组件库同一个文件 */
+@font-face {
+  font-family: "InterVar";
+  src: url("/fonts/InterVariable.woff2") format("woff2-variations"),
+       url("/fonts/InterVariable.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "InterVar";
+  src: url("/fonts/InterVariable-Italic.woff2") format("woff2-variations"),
+       url("/fonts/InterVariable-Italic.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: italic;
+  font-display: swap;
+}
+
+:root {
+  --vp-font-family-base: "InterVar", "Inter", -apple-system, BlinkMacSystemFont,
+    "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --vp-font-family-mono: ui-monospace, SFMono-Regular, "SF Mono", "JetBrains Mono",
+    Menlo, Consolas, monospace;
+
+  --vp-c-brand-1: #3b6ef5;
+  --vp-c-brand-2: #2f5cd8;
+  --vp-c-brand-3: #2549b0;
+  --vp-c-brand-soft: rgba(59, 110, 245, 0.14);
+
+  --vp-c-bg: #fbfbfd;
+  --vp-c-bg-soft: #f4f4f7;
+  --vp-c-bg-alt: #eeeef2;
+  --vp-c-elv: #ffffff;
+
+  --vp-c-text-1: #16161a;
+  --vp-c-text-2: #4a4a52;
+  --vp-c-text-3: #86868e;
+
+  --vp-c-divider: rgba(128, 128, 128, 0.18);
+  --vp-c-border: rgba(128, 128, 128, 0.24);
+  --vp-c-gutter: rgba(128, 128, 128, 0.06);
+
+  --vp-code-block-bg: #f6f6f9;
+  --vp-code-copy-code-bg: rgba(128, 128, 128, 0.12);
+
+  --vp-sidebar-width: 272px;
+  --vp-layout-max-width: 1440px;
+
+  --vp-nav-height: 56px;
+}
+
+.dark {
+  --vp-c-brand-1: #6b93ff;
+  --vp-c-brand-2: #4f7bf0;
+  --vp-c-brand-3: #3b6ef5;
+  --vp-c-brand-soft: rgba(107, 147, 255, 0.16);
+
+  --vp-c-bg: #101014;
+  --vp-c-bg-soft: #16161a;
+  --vp-c-bg-alt: #1c1c21;
+  --vp-c-elv: #1a1a1f;
+
+  --vp-c-text-1: #ececf1;
+  --vp-c-text-2: #a8a8b3;
+  --vp-c-text-3: #74747f;
+
+  --vp-c-divider: rgba(255, 255, 255, 0.1);
+  --vp-c-border: rgba(255, 255, 255, 0.14);
+  --vp-c-gutter: rgba(255, 255, 255, 0.04);
+
+  --vp-code-block-bg: #16161a;
+  --vp-code-copy-code-bg: rgba(255, 255, 255, 0.12);
+}
+
+/* 首页落地区 */
+.runx-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  margin: 22px 0;
+}
+.runx-grid > div {
+  border: 0.5px solid var(--vp-c-divider);
+  border-radius: 12px;
+  padding: 16px 18px;
+  background: var(--vp-c-bg-soft);
+}
+.runx-grid h3 {
+  margin: 0 0 6px !important;
+  font-size: 15px !important;
+  border: none !important;
+  padding: 0 !important;
+}
+.runx-grid p {
+  margin: 0 !important;
+  font-size: 13px;
+  color: var(--vp-c-text-2);
+}
+
+/* 表格：默认 VitePress 表格太挤 */
+.vp-doc table {
+  display: table;
+  width: 100%;
+  font-size: 13.5px;
+}
+.vp-doc th, .vp-doc td {
+  padding: 9px 12px;
+}
+
+/* 代码块里的中文别被折行切碎 */
+.vp-doc div[class*='language-'] code {
+  word-break: keep-all;
+}

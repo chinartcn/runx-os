@@ -22,6 +22,9 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 
+// 内核端口：从请求头取实际监听端口，避免打到同机上的另一个实例
+const { gwPortOf } = require('../@runx-store/gateway');
+
 const ASSETS_PREFIX = API + '/desktop-assets/';
 
 /* 可选依赖：账号体系。没装 @runx-rights-manager 就是单用户，桌面照样能用。 */
@@ -201,6 +204,9 @@ module.exports = {
   onInit(ctx) {
     const os = ctx.os;
     const extDir = ctx.extDir;
+    // 内核实际监听的端口（内核在 ctx.port 里给了）。桌面要回调内核自己 ——
+    // 写死 3000 会在同机跑着第二个实例时打到别人家去。
+    const GW_PORT = gwPortOf(ctx, null);
 
     function load() {
       const file = stateFile();
@@ -291,7 +297,7 @@ module.exports = {
 
     /** 通过事件总线把指令推给前端（前端订阅 host.*） */
     function publishHost(kind, payload) {
-      const port = Number(process.env.PORT) || 3000;
+      const port = GW_PORT;
       return fetch('http://127.0.0.1:' + port + API + '/event-bus', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -302,7 +308,7 @@ module.exports = {
 
     /** 当前应用（按 token 反查）的端口，用于校验 window.open 的目标 */
     async function portOfApp(name) {
-      const gw = Number(process.env.PORT) || 3000;
+      const gw = GW_PORT;
       try {
         const r = await fetch('http://127.0.0.1:' + gw + API + '/apps',
           { signal: AbortSignal.timeout(3000) });
@@ -388,7 +394,7 @@ module.exports = {
           const topic = String(p.topic || '').replace(/[^a-z0-9.-]/gi, '');
           if (!topic) throw Object.assign(new Error('缺少 topic'), { code: 422 });
           const event = 'app.' + appName.replace(/[^a-z0-9-]/gi, '') + '.' + topic;
-          const port = Number(process.env.PORT) || 3000;
+          const port = GW_PORT;
           const r = await fetch('http://127.0.0.1:' + port + API + '/event-bus', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -414,7 +420,7 @@ module.exports = {
     /** term 应用监听的端口：优先 env，其次问 supervisor 要，最后回退默认值 */
     async function termPort() {
       if (process.env.RUNX_TERM_PORT) return Number(process.env.RUNX_TERM_PORT);
-      const gw = Number(process.env.PORT) || 3000;
+      const gw = GW_PORT;
       try {
         const r = await fetch('http://127.0.0.1:' + gw + '/runx/apps',
           { signal: AbortSignal.timeout(3000) });

@@ -18,6 +18,9 @@ const zlib = require('zlib');
 const NAME_RE = /^[a-z][a-z0-9-]*$/;
 const segBytes = (s) => Buffer.byteLength(s, 'utf8');
 
+// 远程安装的下载上限。应用不该有 1GB —— 那是另一个问题。
+const MAX_DOWNLOAD = 64 * 1024 * 1024;
+
 let S = null;
 
 function json(status, obj) {
@@ -29,6 +32,98 @@ function err(code, message, data) {
 
 function validateName(name) {
   return typeof name === 'string' && NAME_RE.test(name) && name.length >= 2 && name.length <= 32;
+}
+
+/**
+ * 在解包后的目录里找到「应用根目录」—— 也就是含 appex.json 的那一层。
+ *
+ * ── 为什么需要这一步 ────────────────────────────────────────────
+ * 商店里绝大多数应用来自 GitHub 仓库，下载到的是**仓库归档**：
+ *
+ *     runx-os-main/
+ *       apps/demo/appex.json     ← 应用在这
+ *       packages/...
+ *       README.md
+ *
+ * 顶层是仓库名，不是应用。所以只认「根目录有 appex.json」的话，
+ * **每一个 GitHub 源的应用都装不上**，报错是「缺少 appex.json」——
+ * 而开发者明明放了 appex.json，排查起来很费劲。
+ *
+ * ── 三种定位方式，按可靠度从高到低 ──────────────────────────────
+ * 1. 显式 subdir（meta.json 里 source.subdir 声明，如 "apps/demo"）
+ *    → 直接用，不猜。多个候选时也用它消歧。
+ * 2. 自动探测：全树找 appex.json，**只有一个** → 就是它。
+ * 3. 多个候选 → 报错，把候选列出来让人选。不猜。
+ *
+ * 为什么不在有多个候选时随便挑一个：挑错了装出来的就是个别的应用，
+ * 而错误信息（名字不对）比「装不上」难查得多。
+ */
+function findAppRoots(dir, maxDepth = 4) {
+  const found = [];
+  const walk = (cur, depth) => {
+    if (depth > maxDepth) return;
+    let ents;
+    try { ents = fs.readdirSync(cur, { withFileTypes: true }); }
+    catch { return; }
+    for (const e of ents) {
+      // node_modules 里也可能躺着 appex.json（应用自己 npm 装的依赖），
+      // 但那不是「这个包的应用」—— 跳过，免得选错。
+      if (e.name === 'node_modules' || e.name === '.git') continue;
+      const abs = path.join(cur, e.name);
+      let st;
+      try { st = fs.lstatSync(abs); } catch { continue; }
+      if (!st.isDirectory()) continue;
+      if (fs.existsSync(path.join(abs, 'appex.json'))) found.push(abs);
+      walk(abs, depth + 1);
+    }
+  };
+  walk(dir, 0);
+  return found;
+}
+
+/**
+ * 定位应用根目录。返回绝对路径；定位不到就抛错（错误信息要说清怎么办）。
+ *
+ * @param {string} tmp    解包后的临时目录
+ * @param {string} subdir 开发者声明的应用在包内的相对路径（可空）
+ */
+function resolveAppRoot(tmp, subdir) {
+  const want = String(subdir || '').trim().replace(/^\/+|\/+$/g, '');
+
+  // 显式 subdir：按「路径后缀」匹配，而不是猜绝对路径。
+  // 为什么要后缀匹配：仓库归档的顶层目录名是「仓库名-分支名」
+  // （runx-os-main / runx-os-abc1234），开发者写 meta.json 时并不知道
+  // （也不该知道）那层叫什么。写 "apps/demo" 就该在任何顶层下都能命中。
+  if (want) {
+    const roots = findAppRoots(tmp);
+    const hit = roots.find((r) => {
+      const rel = path.relative(tmp, r).split(path.sep).join('/');
+      return rel === want || rel.endsWith('/' + want);
+    });
+    if (hit) return hit;
+    // 直接按路径试一次（应用就在解包根的下一层，且包不是仓库归档）
+    const direct = path.join(tmp, want);
+    if (fs.existsSync(path.join(direct, 'appex.json'))) return direct;
+    const rel = roots.map((r) => path.relative(tmp, r).split(path.sep).join('/')).sort();
+    throw new Error(
+      'subdir "' + want + '" 下没有应用。' +
+      (rel.length ? '包里的候选：' + rel.join('、') : '包里没有 appex.json')
+    );
+  }
+
+  const roots = findAppRoots(tmp);
+  if (roots.length === 1) return roots[0];
+  if (roots.length === 0) {
+    throw new Error(
+      '包里没有 appex.json。确认这个包是应用包，而不是整个仓库'
+    );
+  }
+  // 多个候选 —— 把它们列出来，让人选，而不是替人猜
+  const rel = roots.map((r) => path.relative(tmp, r) || '.').sort();
+  throw new Error(
+    '包里有多个应用，请指定 source.subdir。候选：' + rel.join('、') +
+    '（在 meta.json 里加 "source": {"subdir": "..."}）'
+  );
 }
 
 /** 递归校验目录：拒绝 symlink / 字符设备 / 块设备 / fifo / socket，限制段长与总长 */
@@ -111,6 +206,64 @@ function safeExtractTar(tarball, dest) {
   validateDir(dest); // 二次校验：不得残留任何特殊文件
 }
 
+/**
+ * 把内核自带的系统包挂到 <root>/node_modules/@runx/ 下。
+ *
+ * ── 为什么需要这一步 ────────────────────────────────────────────
+ * @runx/sdk、@runx/host 是**内核的一部分**，不发 npm（packages/ 下就是源码）。
+ * 应用 require 它们，靠的是 Node 的模块解析链：
+ *
+ *     apps/<name>/app.js  →  apps/<name>/node_modules
+ *                        →  apps/node_modules
+ *                        →  <root>/node_modules      ← 挂在这里
+ *
+ * 开发时 packages/link.js 会在每个应用目录里建软链，但**商店装的应用**没有
+ * 那一步：tarball 里没有 node_modules（.gitignore 掉了），装完直接
+ * require('@runx/sdk') 就是 MODULE_NOT_FOUND —— 表现为「一启动就死」。
+ *
+ * 挂在 <root> 而不是应用目录里，还有个好处：应用目录要过 validateDir，
+ * 那里软链是被拒绝的（防解包时越界）。放在根上，validateDir 碰不到它。
+ *
+ * 软链而不是复制：包更新了应用下次 require 就是新的，不会出现
+ * 「某个应用里躺着一份两年前的 SDK」。
+ */
+function ensureSystemPackages(root) {
+  const pkgsRoot = path.join(root, 'packages');
+  const scope = path.join(root, 'node_modules', '@runx');
+  const names = ['runx-sdk', 'runx-host'];
+  const made = [];
+  for (const dir of names) {
+    const src = path.join(pkgsRoot, dir);
+    try { if (!fs.statSync(src).isDirectory()) continue; } catch { continue; }
+    // 包目录名是 runx-sdk，对外的包名是 @runx/sdk
+    const pkgName = dir.replace(/^runx-/, '');
+    const dest = path.join(scope, pkgName);
+    fs.mkdirSync(scope, { recursive: true });
+    // 已经是软链且指向对的地方 → 不动（幂等）
+    try {
+      const st = fs.lstatSync(dest);
+      if (st.isSymbolicLink()) {
+        const cur = path.resolve(path.dirname(dest), fs.readlinkSync(dest));
+        if (cur === path.resolve(src)) continue;
+      } else {
+        continue; // 真实目录：有人自己装了一份，不覆盖
+      }
+    } catch { /* 不存在 → 下面建 */ }
+    try { fs.rmSync(dest, { recursive: true, force: true }); } catch { /* 忽略 */ }
+    try {
+      fs.symlinkSync(path.relative(scope, src), dest, 'dir');
+      made.push('@runx/' + pkgName);
+    } catch (e) {
+      // 软链不让建（某些文件系统）→ 退回复制，功能不打折
+      try {
+        fs.cpSync(src, dest, { recursive: true });
+        made.push('@runx/' + pkgName + '(复制)');
+      } catch { /* 实在不行就算了，应用自己也能带依赖 */ }
+    }
+  }
+  return made;
+}
+
 module.exports = {
 
   onInit(ctx) {
@@ -118,6 +271,14 @@ module.exports = {
     const root = ctx.root;
     const cfg = Object.assign({ pnpm_path: 'pnpm', install_timeout_ms: 300000 }, ctx.config || {});
     os.writeState('pax.conf', { pnpm_path: cfg.pnpm_path, install_timeout_ms: cfg.install_timeout_ms });
+
+    // 系统包先挂上：装应用之前就得能用，否则应用起来就 MODULE_NOT_FOUND
+    try {
+      const made = ensureSystemPackages(root);
+      if (made.length && typeof os.logAppend === 'function') {
+        os.logAppend('pax', '系统包已挂载：' + made.join('、'));
+      }
+    } catch { /* 挂不上不该拦住内核启动 */ }
 
     const appsRel = 'apps';
 
@@ -198,9 +359,11 @@ module.exports = {
       };
     }
 
-    async function finalizeInstall(tmp) {
+    async function finalizeInstall(tmp, subdir) {
       validateDir(tmp);
-      const appexPath = path.join(tmp, 'appex.json');
+      // 先定位应用根 —— 仓库归档的顶层是仓库名，应用在子目录里
+      const appRoot = resolveAppRoot(tmp, subdir);
+      const appexPath = path.join(appRoot, 'appex.json');
       if (!fs.existsSync(appexPath)) throw new Error('缺少 appex.json');
       const appex = JSON.parse(fs.readFileSync(appexPath, 'utf8'));
       const name = appex.name;
@@ -210,7 +373,8 @@ module.exports = {
       }
       const dest = path.join(root, appsRel, name);
       if (fs.existsSync(dest)) fs.rmSync(dest, { recursive: true, force: true });
-      fs.cpSync(tmp, dest, { recursive: true });
+      // 只搬应用自己那一层：仓库归档里的 packages/、README 之类不该进应用目录
+      fs.cpSync(appRoot, dest, { recursive: true });
       validateDir(dest);
       await runPnpm(name);
       const entry = buildEntry(appex, name);
@@ -218,27 +382,72 @@ module.exports = {
       return entry;
     }
 
-    async function installFromArchive(tarball) {
+    async function installFromArchive(tarball, subdir) {
       const tmp = path.join(root, 'var', 'runx', '.install-' + Date.now());
       fs.mkdirSync(tmp, { recursive: true });
       try {
         safeExtractTar(tarball, tmp);
-        const entry = await finalizeInstall(tmp);
+        const entry = await finalizeInstall(tmp, subdir);
         return { name: entry.name, version: entry.version, installed_at: entry.installed_at };
       } finally {
         fs.rmSync(tmp, { recursive: true, force: true });
       }
     }
 
-    async function installFromDir(srcDir) {
+    async function installFromDir(srcDir, subdir) {
       const tmp = path.join(root, 'var', 'runx', '.install-' + Date.now());
       fs.mkdirSync(tmp, { recursive: true });
       try {
         fs.cpSync(srcDir, tmp, { recursive: true });
-        const entry = await finalizeInstall(tmp);
+        const entry = await finalizeInstall(tmp, subdir);
         return { name: entry.name, version: entry.version, installed_at: entry.installed_at };
       } finally {
         fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    }
+
+    /**
+     * 远程安装：下载 tarball → 安全解包 → 装。
+     *
+     * 与本地安装走的是**同一套** safeExtractTar —— 远程来的包不会因为
+     * 「是网上的」就少一道校验。软链、绝对路径、../ 一样被拒。
+     *
+     * 下载有上限（MAX_DOWNLOAD），免得一个「1GB 的包」把用户磁盘吃满。
+     * 走商店代理时由 Worker 负责在源站失败后轮询镜像。
+     */
+    async function installFromRemote(url, subdir) {
+      const tmp = path.join(root, 'var', 'runx', '.install-' + Date.now());
+      const tarPath = path.join(root, 'var', 'runx', '.download-' + Date.now() + '.tar.gz');
+      fs.mkdirSync(tmp, { recursive: true });
+      try {
+        const r = await fetch(url, { redirect: 'follow' });
+        if (!r.ok) {
+          throw Object.assign(new Error('下载失败：HTTP ' + r.status), { code: 502 });
+        }
+        // 先看 Content-Length，超了直接拒 —— 不下载完再判断
+        const len = Number(r.headers.get('content-length') || 0);
+        if (len && len > MAX_DOWNLOAD) {
+          throw Object.assign(new Error('包太大：' + len + ' 字节，上限 ' + MAX_DOWNLOAD), { code: 413 });
+        }
+        const chunks = [];
+        let got = 0;
+        for await (const chunk of r.body) {
+          got += chunk.length;
+          if (got > MAX_DOWNLOAD) {
+            throw Object.assign(new Error('包太大，超过上限 ' + MAX_DOWNLOAD + ' 字节'), { code: 413 });
+          }
+          chunks.push(chunk);
+        }
+        fs.writeFileSync(tarPath, Buffer.concat(chunks));
+        safeExtractTar(tarPath, tmp);
+        const entry = await finalizeInstall(tmp, subdir);
+        return {
+          name: entry.name, version: entry.version,
+          installed_at: entry.installed_at, bytes: got,
+        };
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+        fs.rmSync(tarPath, { force: true });
       }
     }
 
@@ -256,16 +465,42 @@ module.exports = {
       os.terminate(name); // 停进程；supervisor 会在 apps:changed 后决定是否重拉
       const dataDir = entry.data_dir;
       const tmp = path.join(root, 'var', 'runx', '.update-' + Date.now());
+      const tarPath = path.join(root, 'var', 'runx', '.update-dl-' + Date.now() + '.tar.gz');
       fs.mkdirSync(tmp, { recursive: true });
       try {
-        if (source.tarball) safeExtractTar(source.tarball, tmp);
-        else fs.cpSync(source.dir, tmp, { recursive: true });
+        if (source.kind === 'remote') {
+          // 与远程安装同一套下载 + 解包 —— 更新路径也不比安装路径宽松
+          const r = await fetch(source.url, { redirect: 'follow' });
+          if (!r.ok) throw Object.assign(new Error('下载失败：HTTP ' + r.status), { code: 502 });
+          const len = Number(r.headers.get('content-length') || 0);
+          if (len && len > MAX_DOWNLOAD) {
+            throw Object.assign(new Error('包太大，超过上限 ' + MAX_DOWNLOAD + ' 字节'), { code: 413 });
+          }
+          const chunks = [];
+          let got = 0;
+          for await (const chunk of r.body) {
+            got += chunk.length;
+            if (got > MAX_DOWNLOAD) {
+              throw Object.assign(new Error('包太大，超过上限 ' + MAX_DOWNLOAD + ' 字节'), { code: 413 });
+            }
+            chunks.push(chunk);
+          }
+          fs.writeFileSync(tarPath, Buffer.concat(chunks));
+          safeExtractTar(tarPath, tmp);
+        } else if (source.kind === 'local' && /\.(tar|gz|tgz)$/i.test(source.path)) {
+          safeExtractTar(source.path, tmp);
+        } else {
+          fs.cpSync(source.path, tmp, { recursive: true });
+        }
         validateDir(tmp);
+        // 更新同样要定位应用根：仓库归档顶层不是应用目录
+        const appRoot = resolveAppRoot(tmp, source.subdir);
         const dest = path.join(root, appsRel, name);
-        copyPreserving(tmp, dest, dataDir ? [dataDir] : []);
+        copyPreserving(appRoot, dest, dataDir ? [dataDir] : []);
         validateDir(dest);
       } finally {
         fs.rmSync(tmp, { recursive: true, force: true });
+        fs.rmSync(tarPath, { force: true });
       }
       await runPnpm(name);
       const appex = JSON.parse(fs.readFileSync(path.join(root, appsRel, name, 'appex.json'), 'utf8'));
@@ -286,17 +521,37 @@ module.exports = {
       return { ok: true };
     }
 
+    /**
+     * 安装源。
+     *   source=local  + path   → 本地目录或 tarball 文件
+     *   source=remote + url    → 远程 tarball（商店代理或开发者的源）
+     *
+     * 远程只接受 http/https，且解包器只认 tar 格式 ——
+     * 别的格式会在解包时报「条目类型不对」，不会静默装错东西。
+     *
+     * subdir：应用在包内的相对路径（如 "apps/demo"）。仓库归档的顶层是仓库名，
+     * 没有它就只能靠自动探测；包里有多个应用时必须由开发者指明。
+     */
     function resolveSource(body) {
       if (!body || typeof body !== 'object') throw new Error('请求体格式错误');
-      if (body.source !== 'local') throw new Error('仅支持 source=local');
+      const subdir = String(body.subdir || '').trim();
+      if (subdir.length > 512) throw new Error('subdir 太长');
+      if (subdir && /(^|\/)\.\.(\/|$)/.test(subdir)) throw new Error('subdir 不允许含 ..');
+      if (body.source === 'remote') {
+        const u = String(body.url || '').trim();
+        if (!u) throw new Error('缺少 url');
+        if (!/^https?:\/\//i.test(u)) throw new Error('只接受 http/https 地址');
+        return { kind: 'remote', url: u, subdir };
+      }
+      if (body.source !== 'local') throw new Error('source 只支持 local 或 remote');
       const p = body.path;
       if (typeof p !== 'string' || !p.trim()) throw new Error('缺少 path');
-      return p.trim();
+      return { kind: 'local', path: p.trim() };
     }
 
     S = {
-      json, err, loadApps, installFromArchive, installFromDir,
-      updateApp, uninstallApp, resolveSource,
+      json, err, loadApps, installFromArchive, installFromDir, installFromRemote,
+      updateApp, uninstallApp, resolveSource, resolveAppRoot, findAppRoots,
       pnpm_path: cfg.pnpm_path, install_timeout_ms: cfg.install_timeout_ms,
     };
   },
@@ -310,8 +565,11 @@ module.exports = {
       return Promise.resolve(ctx.readJson().catch(() => ({}))).then((body) => {
         try {
           const src = S.resolveSource(body);
-          const isTar = /\.(tar|gz|tgz)$/i.test(src);
-          const work = isTar ? S.installFromArchive(src) : S.installFromDir(src);
+          const work = src.kind === 'remote'
+            ? S.installFromRemote(src.url, src.subdir)
+            : (/\.(tar|gz|tgz)$/i.test(src.path)
+              ? S.installFromArchive(src.path, src.subdir)
+              : S.installFromDir(src.path, src.subdir));
           return Promise.resolve(work).then((r) => S.json(200, r))
             .catch((e) => S.err(422, e.message));
         } catch (e) { return S.err(422, e.message); }
@@ -327,8 +585,7 @@ module.exports = {
       return Promise.resolve(ctx.readJson().catch(() => ({}))).then((body) => {
         try {
           const src = S.resolveSource(body);
-          const isTar = /\.(tar|gz|tgz)$/i.test(src);
-          return Promise.resolve(S.updateApp(name, isTar ? { tarball: src } : { dir: src }))
+          return Promise.resolve(S.updateApp(name, src))
             .then((r) => S.json(200, r))
             .catch((e) => S.err(e.code === 404 ? 404 : 422, e.message));
         } catch (e) { return S.err(422, e.message); }

@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>RunX OS · 跑在浏览器里的网页桌面</title>
+<meta name="description" content="RunX OS 是一个跑在浏览器里的网页桌面操作系统：零运行时依赖，可装 Web 应用与 Node 应用，带账号、权限审批与文件管理。">
+<link rel="stylesheet" href="assets/runx-ui.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%233b6ef5'/><path d='M9 22V10h5.4a4.3 4.3 0 0 1 0 8.6H13V22z' fill='white'/></svg>">
+<style>
+  /* ── 页面自己的布局。组件库只给控件，不给布局。 ── */
+  html { margin: 0; scroll-behavior: smooth; }
+  body.rx {
+    margin: 0;
+    color: var(--rx-label-primary);
+    background:
+      radial-gradient(120% 80% at 12% -10%, rgba(59,110,245,.16) 0%, transparent 55%),
+      radial-gradient(90% 70% at 90% 4%, rgba(45,190,140,.10) 0%, transparent 50%),
+      var(--rx-canvas);
+  }
+  @media (prefers-color-scheme: light) {
+    body.rx[data-theme="auto"] {
+      background:
+        radial-gradient(120% 80% at 12% -10%, rgba(59,110,245,.10) 0%, transparent 55%),
+        radial-gradient(90% 70% at 90% 4%, rgba(45,190,140,.07) 0%, transparent 50%),
+        var(--rx-canvas);
+    }
+  }
+
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px; }
+  .nav {
+    position: sticky; top: 0; z-index: 40;
+    backdrop-filter: blur(14px) saturate(160%);
+    -webkit-backdrop-filter: blur(14px) saturate(160%);
+    background: color-mix(in srgb, var(--rx-canvas) 78%, transparent);
+    border-bottom: 0.5px solid var(--rx-hairline);
+  }
+  .nav .wrap { display: flex; align-items: center; gap: 14px; height: 58px; }
+  .logo { display: flex; align-items: center; gap: 9px; font: var(--rx-font-subtitle); font-weight: 600; }
+  .logo svg { width: 24px; height: 24px; border-radius: 7px; }
+  .nav .sp { flex: 1; }
+  .nav a { color: var(--rx-label-secondary); text-decoration: none; font: var(--rx-font-body); }
+  .nav a:hover { color: var(--rx-label-primary); }
+  .nav .links { display: flex; gap: 18px; align-items: center; }
+
+  .hero { padding: 78px 0 60px; }
+  .hero h1 {
+    font: 640 46px/1.12 var(--rx-font-sans);
+    margin: 0 0 16px;
+    letter-spacing: var(--rx-tracking-title);
+  }
+  .hero .lead { font: var(--rx-font-subtitle); color: var(--rx-label-secondary); max-width: 640px; margin: 0 0 26px; line-height: 1.6; }
+  .cta { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .cta .rx-btn { text-decoration: none; }
+
+  .install {
+    margin-top: 30px; max-width: 660px;
+    border: 0.5px solid var(--rx-hairline); border-radius: var(--rx-radius-panel);
+    background: var(--rx-surface-window); overflow: hidden;
+  }
+  .install .bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 9px 14px; border-bottom: 0.5px solid var(--rx-hairline);
+    font: var(--rx-font-caption); color: var(--rx-label-tertiary);
+  }
+  .install pre {
+    margin: 0; padding: 16px 16px 18px; overflow-x: auto;
+    font: var(--rx-font-mono); font-size: 12.5px; line-height: 1.7;
+  }
+  .install .cmd { color: var(--rx-label-primary); }
+  .install .cmt { color: var(--rx-label-tertiary); }
+
+  .sec { padding: 54px 0; border-top: 0.5px solid var(--rx-hairline); }
+  .sec > h2 { font: var(--rx-font-title); margin: 0 0 8px; letter-spacing: var(--rx-tracking-title); }
+  .sec > .sub { color: var(--rx-label-secondary); margin: 0 0 26px; max-width: 640px; }
+
+  .grid { display: grid; gap: 14px; }
+  .grid.c3 { grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); }
+  .grid.c2 { grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); }
+
+  .feat {
+    border: 0.5px solid var(--rx-hairline); border-radius: var(--rx-radius-panel);
+    background: var(--rx-surface-window); padding: 20px;
+  }
+  .feat .ico {
+    width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center;
+    background: var(--rx-accent-soft); color: var(--rx-accent); margin-bottom: 12px;
+  }
+  .feat .ico svg { width: 17px; height: 17px; }
+  .feat h3 { font: var(--rx-font-subtitle); margin: 0 0 6px; }
+  .feat p { color: var(--rx-label-secondary); margin: 0; line-height: 1.62; }
+  .feat code { font: var(--rx-font-mono); font-size: 11.5px; color: var(--rx-label-primary);
+    background: var(--rx-surface-hover); padding: 1px 5px; border-radius: 5px; }
+
+  .caps { display: grid; gap: 1px; background: var(--rx-hairline);
+    border: 0.5px solid var(--rx-hairline); border-radius: var(--rx-radius-panel); overflow: hidden; }
+  .cap { display: flex; gap: 14px; padding: 15px 18px; background: var(--rx-surface-window); align-items: flex-start; }
+  .cap .k {
+    flex: 0 0 128px; font: var(--rx-font-mono); font-size: 12px;
+    color: var(--rx-accent); padding-top: 1px;
+  }
+  .cap .v { flex: 1; color: var(--rx-label-secondary); line-height: 1.6; }
+  .cap .v b { color: var(--rx-label-primary); font-weight: 600; }
+
+  table.rx-table { width: 100%; border-collapse: collapse; }
+  .rx-table th, .rx-table td { text-align: left; padding: 11px 14px; border-bottom: 0.5px solid var(--rx-hairline); }
+  .rx-table th { font: var(--rx-font-status); text-transform: uppercase; letter-spacing: var(--rx-tracking-caps); color: var(--rx-label-tertiary); }
+  .rx-table td { color: var(--rx-label-secondary); }
+  .rx-table td:first-child { color: var(--rx-label-primary); font-weight: 500; }
+
+  .cta-band {
+    margin: 10px 0 70px; padding: 34px; text-align: center;
+    border: 0.5px solid var(--rx-hairline); border-radius: var(--rx-radius-panel);
+    background: var(--rx-surface-window);
+  }
+  .cta-band h2 { font: var(--rx-font-title); margin: 0 0 8px; }
+  .cta-band p { color: var(--rx-label-secondary); margin: 0 0 18px; }
+
+  footer { border-top: 0.5px solid var(--rx-hairline); padding: 26px 0 40px; color: var(--rx-label-tertiary); }
+  footer .wrap { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; }
+  footer a { color: var(--rx-label-secondary); text-decoration: none; }
+  footer a:hover { color: var(--rx-label-primary); }
+  footer .sp { flex: 1; }
+
+  @media (max-width: 680px) {
+    .hero { padding: 48px 0 40px; }
+    .hero h1 { font-size: 33px; }
+    .nav .links a.opt { display: none; }
+    .cap { flex-direction: column; gap: 4px; }
+    .cap .k { flex: none; }
+  }
+</style>
+</head>
+<body class="rx" data-theme="auto">
+
+<nav class="nav">
+  <div class="wrap">
+    <span class="logo">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="#3b6ef5"/><path d="M9 22V10h5.4a4.3 4.3 0 0 1 0 8.6H13V22z" fill="#fff"/></svg>
+      RunX OS
+    </span>
+    <span class="sp"></span>
+    <span class="links">
+      <a class="opt" href="#features">能力</a>
+      <a class="opt" href="#caps">权限模型</a>
+      <a class="opt" href="#store">商店</a>
+      <a class="opt" href="https://docs.rtcnnavext.de5.net/">文档</a>
+      <a class="opt" href="https://store.rtcnnavext.de5.net/">应用商店</a>
+      <a class="rx-btn sm primary" href="#install">开始安装</a>
+    </span>
+  </div>
+</nav>
+
+<header class="hero wrap">
+  <h1>跑在浏览器里的<br>网页桌面操作系统</h1>
+  <p class="lead">
+    RunX OS 把浏览器变成一台真桌面：可装 Web 应用与 Node 应用，有窗口、有 Dock、有终端，
+    还有真正的多用户账号、能力审批与围栏隔离。零运行时依赖 —— 一台装了 Node.js 的机器就能起。
+  </p>
+  <div class="cta">
+    <a class="rx-btn primary lg" href="#install">一键安装</a>
+    <a class="rx-btn lg" href="https://docs.rtcnnavext.de5.net/">阅读文档</a>
+    <a class="rx-btn plain lg" href="https://github.com/chinartcn/runx-os">GitHub</a>
+  </div>
+
+  <div class="install">
+    <div class="bar">
+      <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 4.5 8 1l5 3.5v7L8 15l-5-3.5z"/><path d="M3 4.5 8 8l5-3.5M8 8v7"/></svg>
+      <span>安装（一条命令）</span>
+    </div>
+<pre><span class="cmt"># 国内网络会自动尝试 GitHub 加速镜像</span>
+<span class="cmd">curl -fsSL https://raw.githubusercontent.com/chinartcn/runx-os/main/install.sh | bash</span>
+
+<span class="cmt"># 启动后打开</span>
+<span class="cmd">http://localhost:3000/</span></pre>
+  </div>
+</header>
+
+<section class="sec wrap" id="features">
+  <h2>它不是一个网页壳</h2>
+  <p class="sub">RunX 有自己的内核、扩展模型与权限系统。下面这些不是「以后会做」——它们现在就在仓库里，跑得起来。</p>
+  <div class="grid c3">
+
+    <div class="feat">
+      <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2.5" y="4" width="19" height="13" rx="2"/><path d="M9 21h6M12 17v4"/></svg></div>
+      <h3>真桌面体验</h3>
+      <p>可拖拽窗口、多窗口共存、Dock 与图标网格、菜单栏、全局快捷键。终端是 <code>script</code> 伪 PTY 跑真 xterm.js，不是 <code>&lt;textarea&gt;</code> 装的。</p>
+    </div>
+
+    <div class="feat">
+      <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 2.5 4 6v6c0 5 3.4 8.4 8 9.5 4.6-1.1 8-4.5 8-9.5V6z"/><path d="m9 12 2 2 4-4"/></svg></div>
+      <h3>权限是真的</h3>
+      <p>能力即字符串：<code>fs.read:/sdcard/**</code>。授权永远是「应用 + 能力 + 路径范围」三元组，读能力家族互覆盖 —— 同一个决定不会问四遍。</p>
+    </div>
+
+    <div class="feat">
+      <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5h16v11H4z"/><path d="M2 20h20M9 9h6M9 12h4"/></svg></div>
+      <h3>应用装得进沙箱</h3>
+      <p>tarball / 目录安全解包 → <code>appex.json</code> → 清单。Node 应用跑在 Node 权限模型（<code>--permission</code>）的围栏里，越权访问直接被内核拦。</p>
+    </div>
+
+    <div class="feat">
+      <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="3.4"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/></svg></div>
+      <h3>多用户</h3>
+      <p>多账号、每账号独立授权表。UAC 的答案不是「允许/拒绝」这么粗 —— 对话框类能力的答案是数据（用户亲自选的路径、文件名、按钮）。</p>
+    </div>
+
+    <div class="feat">
+      <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 17.5 9 12l3.5 3.5L20 8"/><path d="M15 8h5v5"/></svg></div>
+      <h3>事件总线</h3>
+      <p>内核内总线贯穿应用、扩展与桌面：<code>app:started</code>、<code>sys.dialog.open</code>、<code>sys.clipboard.write</code>。Web 应用与 Node 应用用同一套订阅语义。</p>
+    </div>
+
+    <div class="feat">
+      <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5.5h16M4 12h16M4 18.5h10"/></svg></div>
+      <h3>零依赖内核</h3>
+      <p>不需要 <code>npm install</code>，不需要编译原生模块。扩展就是放进 <code>.js/</code> 的目录：<code>mod.json</code>、<code>client.js</code>、<code>styles.css</code>，顺序由清单决定。</p>
+    </div>
+
+  </div>
+</section>
+
+<section class="sec wrap" id="caps">
+  <h2>能力模型</h2>
+  <p class="sub">能力是一段字符串。它同时说明「能做什么」和「能碰哪些路径」。用户看到的审批框里，就是这行字符串。</p>
+  <div class="caps">
+    <div class="cap"><span class="k">fs.read:/sdcard/**</span><span class="v"><b>读文件</b>，范围限定在 <code>/sdcard</code> 之下。同时覆盖 <code>fs.list</code> / <code>fs.stat</code> / <code>fs.watch</code> —— 读能力是一个家族。</span></div>
+    <div class="cap"><span class="k">fs.write:./data/**</span><span class="v"><b>写文件</b>，只能写在自己的 <code>data</code> 目录里。想写别处，需要一次新的授权。</span></div>
+    <div class="cap"><span class="k">proc.spawn:/usr/bin/tr</span><span class="v"><b>起子进程</b>，高危操作，需要先开限时管理员模式。参数是数组，没有 shell。</span></div>
+    <div class="cap"><span class="k">dialog.open</span><span class="v"><b>文件选择器</b>。路径由用户在桌面上亲自点出来 —— 应用不能指定自己想去哪，<code>startIn</code> 有白名单，也没有 <code>defaultPath</code>。</span></div>
+    <div class="cap"><span class="k">clipboard.read</span><span class="v"><b>读剪贴板</b>，中危：剪贴板里可能刚复制过密码、验证码或私钥。写是低危。</span></div>
+    <div class="cap"><span class="k">net.fetch:api.example.com</span><span class="v"><b>联网</b>，按主机限定。可选 <code>sys.info</code> 读系统信息，不含任何敏感内容。</span></div>
+  </div>
+</section>
+
+<section class="sec wrap">
+  <h2>里面有什么</h2>
+  <p class="sub">内置应用与核心扩展。</p>
+  <table class="rx-table">
+    <thead><tr><th>组件</th><th>作用</th></tr></thead>
+    <tbody>
+      <tr><td>终端</td><td>RunX 真实交互式终端 —— <code>script</code> 伪 PTY + xterm.js</td></tr>
+      <tr><td>示例</td><td>五页演示文件选择器、文件监听、大文件流式、子进程 stdin、剪贴板</td></tr>
+      <tr><td>@runx-desktop</td><td>桌面 UI：导航条 / 菜单栏 / 窗口管理 / Dock / 图标网格</td></tr>
+      <tr><td>@runx-rights-manager</td><td>账号、授权、UAC 审批、风险拦截</td></tr>
+      <tr><td>@runx-node-safety</td><td>应用围栏：Node 权限模型（<code>--experimental-permission</code>）</td></tr>
+      <tr><td>@runx-supervisor</td><td>应用生命周期：启停、重启、autostart、崩溃自愈</td></tr>
+      <tr><td>@runx-pax</td><td>应用安装：安全解包 → <code>appex.json</code> → 清单</td></tr>
+      <tr><td>@runx-x11</td><td>X11 图形应用（按需加载，探测不到后端时给安装建议）</td></tr>
+      <tr><td>@runx-event-bus</td><td>内核内事件总线</td></tr>
+      <tr><td>@runx-ui</td><td>界面组件库：与桌面同一套视觉语言</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="sec wrap" id="store">
+  <h2>应用商店</h2>
+  <p class="sub">
+    极致白嫖，按需驱动。商店只存元数据与校验值，包在开发者自己的源上 ——
+    零服务器成本，官方只做指路明灯。
+  </p>
+  <div class="grid c2">
+    <div class="feat">
+      <h3>开发者自带干粮</h3>
+      <p>发版到 GitHub / npm / 任意静态托管，然后填个 <code>meta.json</code> 地址，点「一键同步」—— 瞬间全网生效。商店不代理你的包。</p>
+    </div>
+    <div class="feat">
+      <h3>权限变了要重新弹窗</h3>
+      <p>下载前做 SHA 强校验；应用申请的 RunX 能力有变动，安装时逐条重新走 UAC。权限没变就静默放行。</p>
+    </div>
+    <div class="feat">
+      <h3>代理池救场</h3>
+      <p>源站拉不动时自动轮询 GitHub 镜像代理；全挂了会告诉你每一次尝试 —— 是「仓库没了」还是「GitHub 抽风」。</p>
+    </div>
+    <div class="feat">
+      <h3>死链自净</h3>
+      <p>下载 404 会自动上报。连续两次失败才去问上游 API：仓库真没了就下架，API 挂了就不动 —— 锅甩给大厂。</p>
+    </div>
+  </div>
+  <div class="cta" style="margin-top:22px">
+    <a class="rx-btn primary" href="https://store.rtcnnavext.de5.net/">打开商店</a>
+    <a class="rx-btn plain" href="https://docs.rtcnnavext.de5.net/reference/store">商店 API 文档</a>
+  </div>
+</section>
+
+<section class="wrap">
+  <div class="cta-band">
+    <h2>现在就起一台</h2>
+    <p>只需要 Node.js ≥ 18 和 <code>bash</code>。手机、平板、树莓派、服务器都行。</p>
+    <div class="cta" style="justify-content:center">
+      <a class="rx-btn primary lg" href="#install">一键安装</a>
+      <a class="rx-btn lg" href="https://docs.rtcnnavext.de5.net/">看文档</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>RunX OS · MIT 开源</span>
+    <span class="sp"></span>
+    <a href="https://github.com/chinartcn/runx-os">GitHub</a>
+    <a href="https://docs.rtcnnavext.de5.net/">文档</a>
+    <a href="https://store.rtcnnavext.de5.net/">应用商店</a>
+    <a href="https://api.rtcnnavext.de5.net/">API</a>
+  </div>
+</footer>
+
+<script src="assets/runx-ui.js"></script>
+<script>
+  // 主题：默认跟随系统，用户在导航里可以改 —— 改完记住。
+  RX.theme(RX.theme());
+</script>
+</body>
+</html>
