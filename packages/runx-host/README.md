@@ -2,7 +2,7 @@
 
 RunX 桌面 API（应用侧）。让一个跑在 RunX 里的 Node 应用知道自己**是个窗口**，而不只是一个端口：发通知、开子窗口、改标题、读主题、在事件总线上和其他应用说话。
 
-零依赖，一个文件，Node 18+。
+零依赖，一个文件。**Node 18+ 可用**；`bus` 的订阅依赖内置 `WebSocket`，需要 **Node 21+**（发通知、开窗口不受影响）。
 
 ```js
 const rx = require('@runx/host');
@@ -15,12 +15,17 @@ await rx.dock.badge(7);
 
 ## 安装
 
+不发 npm，从仓库装（`private: true`，`npm publish` 会直接拒绝）：
+
 ```bash
-npm i @runx/host                 # 从 npm 装
-npm i /opt/runx/packages/runx-host   # 或直接从 RunX 源码树里装（未发包时的等价物）
+node packages/link.js notes            # 推荐：把两个包软链进 apps/notes，仓库更新即生效
 ```
 
-两种装法拿到的是同一份代码。RunX 自带的示例应用用的就是仓库内的路径，所以离线环境也能跑。
+```bash
+cd apps/notes && npm i ../../packages/runx-host    # 或者用 npm 装（也是软链）
+```
+
+为什么不能 `npm i github:chinartcn/runx-os` —— npm 装不了 monorepo 子包，只能 clone 之后指路径。三种装法的对比见 [packages/README.md](../README.md)。
 
 ## 为什么是服务端调用
 
@@ -102,6 +107,13 @@ rx.bus.publish('sys.hello', { at: Date.now() });
 ```
 
 总线连接是**懒建**的：只发通知不订阅的应用不会开 WebSocket。建立后常驻，断线按 1s → 8s 退避重连，重连后自动把订阅重放一遍（内核重启不需要应用感知）。
+
+订阅依赖 Node 内置的 `WebSocket`（**21+**）。在 18/20 上 `subscribe()` 会同步抛
+`ENOWEBSOCKET` —— 而不是默默收不到事件。要写兼容代码：
+
+```js
+if (rx.bus.available) rx.bus.subscribe('app.*.done', fn);
+```
 
 `request()` 的约定是请求方在 payload 里带 `__replyTo`，应答方按它回一条。需要对方配合，不适合作通用 RPC 用，但两个应用之间握手足够了。
 

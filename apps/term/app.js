@@ -16,6 +16,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const ws = require('./lib/ws');
+const host = require('./lib/host');
 const { SessionManager, normalizeSpec, probeScript, probeSttyFileMode, MAX_SESSIONS, GRACE_MS } = require('./lib/pty');
 
 const PORT = Number(process.env.PORT) || 3460;
@@ -24,6 +25,8 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 const START_TS = Date.now();
 
 const sessions = new SessionManager();
+// Dock 角标跟着会话数走：窗口最小化后也能看出「终端里还挂着几个」
+sessions.onChange = (n) => host.badge(n);
 const connsBySession = new Map(); // sessionId -> Set<conn>
 const pendingToReap = new Map();  // sessionId -> timeout（conn 全断后的宽限回收）
 
@@ -75,6 +78,8 @@ function wireSession(s) {
   };
   s.onExit = (sess, code, signal) => {
     broadcast(sess.id, { type: 'exit', sessionId: sess.id, code, signal });
+    // 跑久了的命令结束、或者失败了，才值得发一条桌面通知（见 lib/host.js）
+    host.exited(sess, code, signal);
     // 一次性命令（TUI 图标）进程结束就没有意义了：给前端 2 秒发「关窗」，之后
     // 无论如何回收 —— 否则用户关掉窗口、页面卡住或没监听时，会话会挂到 30 分钟
     // 空闲回收，白占一个名额和一份 PTY。
@@ -300,6 +305,7 @@ const server = http.createServer((req, res) => {
     return res.end(JSON.stringify({
       ok: true, pid: process.pid, sessions: sessions.size, uptime_ms: Date.now() - START_TS,
       pty: !!probeScript(),
+      host: host.status(),
       // resize 方式：inplace = 原地 ioctl（不重启前台程序）；respawn = 回落重建
       resize: probeSttyFileMode() ? 'inplace' : 'respawn',
     }));

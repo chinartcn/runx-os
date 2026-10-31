@@ -119,6 +119,11 @@ function safeName() {
   return String(NAME).toLowerCase().replace(/[^a-z0-9-]/g, '');
 }
 
+/** 有没有内置 WebSocket（Node 21+ 才有）。没有的话订阅一律不可用，必须明说 */
+function hasWS() {
+  return typeof globalThis.WebSocket === 'function';
+}
+
 function openBus() {
   if (bus.ws || bus.closing) return;
   const WS = globalThis.WebSocket;
@@ -264,6 +269,9 @@ const api = {
   },
 
   bus: {
+    /** 本机能不能订阅（Node 21+）。发布事件不需要它。 */
+    get available() { return hasWS(); },
+
     /**
      * 发布事件。topic 会自动挂到 `app.<自己>.` 前缀下，不会和其他应用撞名。
      * 要发全局事件（谁都能收）就用 `sys.` 开头 —— 这条会被后端原样放行。
@@ -282,6 +290,14 @@ const api = {
      *   rx.bus.subscribe('sys.*', fn)           → 系统事件
      */
     subscribe(topic, fn) {
+      // 订阅在 Node 18/20 上是不可能实现的（没有内置 WebSocket）。这里同步抛，
+      // 而不是让 ensureBus 的失败被 .catch 吞掉 —— 后者表现为「代码没错、事件
+      // 就是不来」，用户能查一整天。想写兼容代码就判 `rx.bus.available`。
+      if (!hasWS()) {
+        throw Object.assign(
+          new Error('当前 Node 没有内置 WebSocket（需要 21+），事件总线订阅不可用；' +
+            '发布事件（bus.publish）不受影响'), { code: 'ENOWEBSOCKET' });
+      }
       const pattern = busPattern(String(topic));
       let set = bus.subs.get(pattern);
       if (!set) {

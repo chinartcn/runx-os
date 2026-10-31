@@ -463,8 +463,16 @@ class Session {
 class SessionManager {
   constructor() {
     this.sessions = new Map();
+    // 会话数量变化时的回调（与宿主集成用：Dock 角标 = 有几个会话）
+    this.onChange = null;
     this._sweeper = setInterval(() => this._sweep(), 60 * 1000);
     this._sweeper.unref();
+  }
+
+  /** 通知订阅者「会话集合变了」。宿主没装/没连上时这里什么都不发生 */
+  _changed() {
+    if (!this.onChange) return;
+    try { this.onChange(this.sessions.size); } catch (e) { /* 订阅者自己的问题 */ }
   }
 
   get size() { return this.sessions.size; }
@@ -484,6 +492,7 @@ class SessionManager {
     const sid = id || newId();
     const s = new Session(sid, clampCols(cols), clampRows(rows), normalizeSpec(spec));
     this.sessions.set(sid, s);
+    this._changed();
     return s;
   }
 
@@ -513,24 +522,29 @@ class SessionManager {
     if (!s) return false;
     s.kill();
     this.sessions.delete(id);
+    this._changed();
     return true;
   }
 
   _sweep() {
     const now = Date.now();
+    let removed = 0;
     for (const [id, s] of this.sessions) {
       const noConns = !s.conns || s.conns.size === 0;
       if (noConns && now - s.lastActive > IDLE_MS) {
         s.kill();
         this.sessions.delete(id);
+        removed++;
       }
     }
+    if (removed) this._changed();
   }
 
   /** 进程退出时清理全部会话（含孙进程） */
   disposeAll() {
     for (const s of this.sessions.values()) s.kill();
     this.sessions.clear();
+    this._changed();
   }
 }
 

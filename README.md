@@ -101,7 +101,8 @@ RunX OS
 │   ├── @runx-files        文件管理器（浏览 / 预览 / 下载，写操作默认关闭）
 │   ├── @runx-settings     全局设置（接管全部设置：内核级 + 桌面级统一面板）
 │   └── @runx-x11          X11 图形应用（按需加载，探测不到后端时给安装建议）
-├── packages/
+├── packages/        应用开发包（不发 npm，从本仓库分发）
+│   ├── link.js      把 @runx/host / @runx/sdk 挂进应用（node packages/link.js --all）
 │   ├── runx-host    应用侧桌面 API（@runx/host：通知 / 窗口 / 主题 / 总线）
 │   └── runx-sdk     应用侧 OS 接口（@runx/sdk：fs / proc / net，走审批）
 ├── apps/            已部署应用（当前内置 term）
@@ -203,12 +204,19 @@ RunX 里的应用是一个普通 Node 进程 —— 默认能读 `~/.ssh`、能�
 | 审批 | `@runx-rights-manager` | 每次走 SDK 的调用要不要问用户 | 软（拦住 SDK 调用） |
 | 提权 | `@runx-administrator-mode` | 高危操作什么时候允许 | 30 分钟票据，到期自动失效 |
 
-应用侧用 `@runx/sdk` 发起调用，用 `@runx/host` 操作窗口：
+应用侧用 `@runx/sdk` 发起调用，用 `@runx/host` 操作窗口。两个包不发 npm，从本仓库挂进应用：
+
+```bash
+node packages/link.js notes      # apps/notes 里出现 node_modules/@runx/{sdk,host}
+```
 
 ```js
 const rx = require('@runx/sdk');
 const txt = await rx.fs.read('/sdcard/notes/today.md');   // 第一次会弹框问
 ```
+
+软链方式的好处是 `git pull` 之后应用立刻用上新版本。分发方式与其他装法见
+[packages/README.md](packages/README.md)。
 
 ```json
 // appex.json：声明围栏边界（安装时进 apps.json）

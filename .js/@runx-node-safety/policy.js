@@ -18,8 +18,24 @@
  *    spawn 仍由 supervisor 执行（它才是进程的所有者）。
  */
 
+const fs = require('fs');
 const path = require('path');
 const cp = require('child_process');
+
+/**
+ * 内核自带的两个包（@runx/host、@runx/sdk）永远可读。
+ *
+ * 应用要能 require('@runx/sdk') 才谈得上「走审批」，可这两个包在 packages/ 下、
+ * 在应用自己的目录之外；用软链挂上去的还会被 realpath 解析到那边。不显式放行的话，
+ * 围栏一开，应用第一行 require 就 ERR_ACCESS_DENIED —— 表现是「一启动就死」，
+ * 而且报错还没提到权限，很难查。
+ */
+const KERNEL_PKGS = (() => {
+  const base = path.resolve(__dirname, '../../packages');
+  return ['runx-host', 'runx-sdk']
+    .map((d) => path.join(base, d))
+    .filter((d) => { try { return fs.statSync(d).isDirectory(); } catch (e) { return false; } });
+})();
 
 let probeCache = null;
 
@@ -134,6 +150,9 @@ function plan(app, cfg) {
       }
     }
   }
+
+  // SDK 所在的目录：无论应用怎么挂的（软链 / 复制 / 相对路径安装），都得能读
+  for (const d of KERNEL_PKGS) reads.push(d);
 
   // 全局附加目录：extra 只读（放证书、字体这类共享资源），extra_write 才给写
   for (const p of (conf.extra || [])) {

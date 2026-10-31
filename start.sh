@@ -108,6 +108,11 @@ fi
 # ── 单次启动内核 + 就绪等待 ────────────────────────────────────────────────
 # 返回：内核退出码（0 = 正常退出）
 boot_kernel() {
+  # 把 @runx/host / @runx/sdk 挂进应用。这两个包不发 npm、node_modules 也不入库，
+  # 所以每次启动前挂一次（幂等，几百毫秒）；漏了也不致命 —— 应用里是 try/catch，
+  # 只是桌面集成（通知、角标）不生效。
+  node "$ROOT/packages/link.js" --all >/dev/null 2>&1 || true
+
   node "$ROOT/server.js" --root "$ROOT" --port "$PORT" --host 0.0.0.0 &
   SRV=$!
 

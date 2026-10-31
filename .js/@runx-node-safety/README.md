@@ -62,6 +62,21 @@ Node 的权限模型是**启动时全有全无**：少声明一条，应用一�
 没声明 `permissions` 的应用拿到的是基线：**只读自身目录、只写 `data/`**（仅在
 `strict` 模式下生效）。
 
+### 内核自带的两个包永远可读
+
+`packages/runx-host` 与 `packages/runx-sdk` 会自动进 `--allow-fs-read`，不管应用
+是怎么装的（软链 / 复制 / 相对路径）。原因是这两个目录在应用自己的目录之外，而
+「走审批」的前提是应用先能 `require('@runx/sdk')` —— 不放行的话，围栏一开应用
+第一行就 `ERR_ACCESS_DENIED`，报错里还看不出是权限问题。
+
+放行的只有这两个目录，不是整个 `packages/`，也不是仓库根：
+
+```console
+$ node --permission --allow-fs-read=/app --allow-fs-read=…/runx-sdk app.js
+sdk loaded
+blocked /etc: ERR_ACCESS_DENIED
+```
+
 ## 配置 `var/runx/safety.json`
 
 ```json

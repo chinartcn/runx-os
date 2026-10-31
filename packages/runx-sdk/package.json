@@ -12,6 +12,17 @@
   "engines": {
     "node": ">=18"
   },
+  "private": true,
+  "license": "MIT",
+  "homepage": "https://github.com/chinartcn/runx-os/tree/main/packages/runx-sdk",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chinartcn/runx-os.git",
+    "directory": "packages/runx-sdk"
+  },
+  "bugs": {
+    "url": "https://github.com/chinartcn/runx-os/issues"
+  },
   "keywords": [
     "runx",
     "sdk",
@@ -19,18 +30,5 @@
     "permissions",
     "uac",
     "filesystem"
-  ],
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/chinartcn/runx-os.git",
-    "directory": "packages/runx-sdk"
-  },
-  "scripts": {
-    "pack": "npm pack"
-  },
-  "publishConfig": {
-    "access": "public",
-    "registry": "https://registry.npmjs.org/"
-  },
-  "license": "MIT"
+  ]
 }

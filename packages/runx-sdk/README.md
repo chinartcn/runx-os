@@ -26,11 +26,19 @@ await rx.fs.write('/sdcard/notes/today.md', txt + '\n- 新的一条');
 
 ## 安装
 
+不发 npm，从仓库装（`private: true`，`npm publish` 会直接拒绝）：
+
 ```bash
-npm i @runx/sdk
+node packages/link.js notes          # 软链进 apps/notes，仓库更新即生效
+node packages/link.js --copy notes   # 应用要整个打包带走时用这个（快照）
 ```
 
-依赖必须装在**应用自己的目录**里（`node_modules/`）—— 指向目录外的符号链接会被围栏挡住。
+或者用 npm 指本地路径（同样是软链）：`cd apps/notes && npm i ../../packages/runx-sdk`。
+三种装法与「为什么不能 `npm i github:...`」见 [packages/README.md](../README.md)。
+
+依赖要装在**应用自己的目录**里（`node_modules/`）。软链到 `packages/` 也没问题：
+围栏（node-safety）会自动放行这两个包所在的目录 —— 否则「能走审批」的前提
+（应用能 `require('@runx/sdk')`）就不成立。
 
 ## 不在 RunX 里跑会怎样
 

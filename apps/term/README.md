@@ -17,7 +17,8 @@ term/
 ├── icon.svg            # 桌面图标
 ├── lib/
 │   ├── ws.js           # 零依赖 WebSocket 服务端（RFC6455 子集）
-│   └── pty.js          # 伪 PTY 会话管理（基于 util-linux `script`）
+│   ├── pty.js          # 伪 PTY 会话管理（基于 util-linux `script`）
+│   └── host.js         # 与桌面的可选集成：Dock 角标 / 长任务完成通知
 └── public/
     ├── index.html       # 标签栏 + 终端容器 + 工具栏
     ├── term.css
@@ -151,6 +152,23 @@ curl -s -X POST http://127.0.0.1:4125/runx/desktop/icons \
 ```
 
 之后双击桌面「终端」图标即可开窗使用。
+
+---
+
+## 和桌面的集成（可选）
+
+在 RunX 里跑时，term 会用 [`@runx/host`](../../packages/runx-host/) 做两件事：
+
+| 时机 | 桌面上的表现 |
+|---|---|
+| 会话数变化 | Dock 角标显示当前有几个终端会话（0 自动清掉） |
+| 跑够 20 秒的命令结束、或失败退出 | 一条通知：「命令完成 · `make build` · 3 分 12 秒」 |
+
+两条都是**可选**的：`require('@runx/host')` 失败、没有 `RUNX_APP_TOKEN`、桌面没开，
+都只是不显示，终端本身照常用。交互式 shell 退出不通知（自己敲的 `exit`，不用告诉
+你），桌面双击的一次性命令也不通知（窗口就在眼前）。
+
+装包：`node packages/link.js term`。`GET /healthz` 的 `host` 字段能看出有没有连上。
 
 ---
 
