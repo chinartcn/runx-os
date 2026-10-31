@@ -165,6 +165,17 @@ module.exports = {
         }
         if (!Object.keys(env).length) env = undefined;
       }
+      // permissions：应用声明的能力（`fs.read:/sdcard/**` 这种）。安装时原样
+      // 搬进 apps.json，由 @runx-node-safety 翻译成 Node 的 --allow-* 开关。
+      // 格式非法就整条丢掉，不猜 —— 围栏宁可少开，也不能开成错的。
+      let permissions;
+      if (Array.isArray(appex.permissions)) {
+        permissions = appex.permissions
+          .filter((x) => typeof x === 'string' && /^[a-z]+\.[a-z]+(:.*)?$/.test(x.trim()))
+          .map((x) => x.trim())
+          .slice(0, 32);
+        if (!permissions.length) permissions = undefined;
+      }
       return {
         name,
         type: isNode ? 'node' : 'web',
@@ -182,6 +193,7 @@ module.exports = {
         data_dir: appex.data_dir || null,
         version: appex.version || '0.0.0',
         description: appex.description || '',
+        permissions,
         installed_at: Date.now(),
       };
     }

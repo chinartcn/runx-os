@@ -1,0 +1,10 @@
+{
+  "name": "权限与账号（RunX 扩展）",
+  "description": "多用户账号、应用能力授权、风险操作拦截与 UAC 审批：应用要碰沙箱之外的东西，得有人点一下同意。",
+  "version": "0.1.0",
+  "author": "chinartcn",
+  "enabled": true,
+  "core": true,
+  "order": 20,
+  "requires": []
+}

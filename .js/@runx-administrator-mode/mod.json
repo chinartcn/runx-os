@@ -1,0 +1,10 @@
+{
+  "name": "管理员模式（RunX 扩展）",
+  "description": "有限期的提权票据：默认 30 分钟自动作废，桌面常驻红条倒计时，高风险操作靠它决定要不要二次确认。",
+  "version": "0.1.0",
+  "author": "chinartcn",
+  "enabled": true,
+  "core": true,
+  "order": 25,
+  "requires": []
+}

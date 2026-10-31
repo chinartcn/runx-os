@@ -1,0 +1,312 @@
+/* @runx-rights-manager —— 审批框 / 登录 / 授权面板
+ *
+ * 只定义 rxrm- 前缀的类。可以脱离桌面单独加载（只有 API 的页面），所以每个
+ * 变量都带兜底值：有 tokens.css 就跟着主题走，没有就用括号里的深色配色。
+ */
+
+.rxrm-veil {
+  position: fixed;
+  inset: 0;
+  z-index: 940;                 /* 高于窗口(500)与通知(520)，高于 x11 决策框(900) */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.34);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  opacity: 0;
+  transition: opacity var(--dur-base, 200ms) var(--ease-out, ease-out);
+}
+.rxrm-veil.in { opacity: 1; }
+
+/* 没有桌面时（纯 API 页面），用自带深色底以免白底白字 */
+.rxrm-solo {
+  background: rgba(8, 10, 16, 0.72);
+  color: #e8ecf5;
+}
+.rxrm-solo .rxrm-box {
+  background: rgba(24, 27, 36, 0.94);
+  border-color: rgba(255, 255, 255, 0.12);
+  color: #e8ecf5;
+}
+
+.rxrm-box {
+  width: min(520px, 100%);
+  max-height: min(86vh, 760px);
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius-panel, 12px);
+  border: 1px solid var(--hairline, rgba(0, 0, 0, 0.1));
+  background: var(--surface-window, rgba(250, 250, 252, 0.94));
+  -webkit-backdrop-filter: blur(30px) saturate(1.8);
+  backdrop-filter: blur(30px) saturate(1.8);
+  box-shadow: var(--shadow-panel, 0 24px 60px rgba(0, 0, 0, 0.28));
+  color: var(--label-primary, #111);
+  overflow: hidden;
+  transform: translateY(10px) scale(0.98);
+  transition: transform var(--dur-base, 200ms) var(--ease-out, ease-out);
+}
+.rxrm-veil.in .rxrm-box { transform: none; }
+.rxrm-box.small { width: min(380px, 100%); }
+.rxrm-box.wide  { width: min(640px, 100%); }
+
+/* ── 头部 ── */
+.rxrm-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 18px 20px 10px;
+  flex: none;
+}
+.rxrm-ico {
+  width: 38px; height: 38px; flex: none;
+  display: grid; place-items: center;
+  font-size: 20px;
+  border-radius: 11px;
+  background: var(--surface-sunken, rgba(0, 0, 0, 0.05));
+}
+.rxrm-veil.gate .rxrm-foot .rxrm-btn { width: 100%; }
+.rxrm-ico.letter {
+  font: 600 16px/1 var(--font-sans, system-ui);
+  color: var(--label-secondary, rgba(0, 0, 0, 0.62));
+  background: var(--surface-sunken, rgba(0, 0, 0, 0.06));
+}
+.rxrm-headtx { min-width: 0; flex: 1; }
+.rxrm-title {
+  font: var(--font-subtitle, 600 15px/1.36 system-ui);
+  letter-spacing: var(--tracking-title, -0.01em);
+}
+.rxrm-sub {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+  margin-top: 4px;
+  font: var(--font-caption, 400 11.5px/1.4 system-ui);
+  color: var(--label-secondary, rgba(0, 0, 0, 0.6));
+}
+.rxrm-who { color: var(--label-tertiary, rgba(0, 0, 0, 0.38)); }
+
+.rxrm-x {
+  flex: none;
+  width: 26px; height: 26px;
+  display: grid; place-items: center;
+  border: 0; border-radius: 8px;
+  background: transparent;
+  color: var(--label-tertiary, rgba(0, 0, 0, 0.38));
+  font-size: 13px; cursor: pointer;
+}
+.rxrm-x:hover { background: var(--surface-hover, rgba(0, 0, 0, 0.06)); }
+
+/* ── 风险标签 ── */
+.rxrm-chip {
+  display: inline-flex; align-items: center;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill, 999px);
+  font: var(--font-status, 500 11px/1.35 system-ui);
+  letter-spacing: var(--tracking-caps, 0.05em);
+  background: var(--surface-sunken, rgba(0, 0, 0, 0.06));
+  color: var(--label-secondary, rgba(0, 0, 0, 0.6));
+  white-space: nowrap;
+}
+.rxrm-chip.risk-low    { background: color-mix(in srgb, var(--semantic-green, #1a7f37) 16%, transparent); color: var(--semantic-green, #1a7f37); }
+.rxrm-chip.risk-medium { background: color-mix(in srgb, var(--semantic-yellow, #b25000) 18%, transparent); color: var(--semantic-yellow, #b25000); }
+.rxrm-chip.risk-high   { background: color-mix(in srgb, var(--semantic-red, #d70015) 16%, transparent); color: var(--semantic-red, #d70015); }
+.rxrm-chip.acc         { background: var(--accent-soft, rgba(10, 108, 255, 0.14)); color: var(--accent, #0a6cff); }
+
+/* ── 正文 ── */
+.rxrm-body { padding: 4px 20px 14px; min-height: 0; }
+.rxrm-body.scroll { overflow: auto; -webkit-overflow-scrolling: touch; }
+.rxrm-target {
+  display: flex; align-items: stretch; gap: 0;
+  border: 1px solid var(--hairline, rgba(0, 0, 0, 0.11));
+  border-radius: var(--radius-field, 8px);
+  overflow: hidden;
+  background: var(--surface-card, #fff);
+}
+.rxrm-target-cap {
+  flex: none;
+  padding: 8px 10px;
+  font: var(--font-caption, 400 11.5px/1.4 system-ui);
+  color: var(--label-secondary, rgba(0, 0, 0, 0.6));
+  background: var(--surface-sunken, rgba(0, 0, 0, 0.045));
+  border-right: 1px solid var(--hairline, rgba(0, 0, 0, 0.11));
+  white-space: nowrap;
+}
+.rxrm-path {
+  flex: 1; min-width: 0;
+  padding: 8px 10px;
+  font: var(--font-mono, 12px/1.45 ui-monospace, monospace);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  /* 不要用 direction:rtl 做「优先露尾部」—— 那会把开头的 / 挪到末尾，
+     路径看起来像是少了一层（…/data/own.txt/）。缩略交给 shortPath 做。 */
+  text-align: left;
+}
+
+.rxrm-why, .rxrm-reason, .rxrm-tip, .rxrm-warn, .rxrm-err {
+  margin: 10px 0 0;
+  font: var(--font-caption, 400 11.5px/1.5 system-ui);
+  color: var(--label-secondary, rgba(0, 0, 0, 0.6));
+}
+/* 风险说明按等级上色：低风险不该用警告色，否则「黄色 = 要注意」就失效了 */
+.rxrm-why { color: var(--label-secondary, rgba(0, 0, 0, 0.6)); }
+.rxrm-why.risk-medium { color: var(--semantic-yellow, #b25000); }
+.rxrm-why.risk-high   { color: var(--semantic-red, #d70015); }
+.rxrm-warn {
+  padding: 8px 10px;
+  border-radius: var(--radius-field, 8px);
+  background: color-mix(in srgb, var(--semantic-red, #d70015) 10%, transparent);
+  color: var(--semantic-red, #d70015);
+}
+.rxrm-err  { color: var(--semantic-red, #d70015); }
+.rxrm-tip  { color: var(--label-tertiary, rgba(0, 0, 0, 0.38)); }
+
+/* ── 底部 ── */
+.rxrm-foot {
+  flex: none;
+  padding: 12px 20px 16px;
+  border-top: 1px solid var(--hairline, rgba(0, 0, 0, 0.08));
+  background: var(--surface-chrome, rgba(250, 250, 252, 0.5));
+}
+.rxrm-foot.between { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.rxrm-btns { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.rxrm-foot.between .rxrm-btns { justify-content: flex-end; }
+
+.rxrm-btn {
+  padding: 0 14px;
+  height: var(--control-h-lg, 34px);
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: var(--radius-field, 8px);
+  border: 1px solid var(--stroke-control, rgba(0, 0, 0, 0.14));
+  background: var(--surface-card, #fff);
+  color: var(--label-primary, #111);
+  font: var(--font-toolbar, 500 13px/1.2 system-ui);
+  cursor: pointer;
+  transition: background var(--dur-fast, 120ms) var(--ease-out, ease-out), transform 80ms;
+}
+.rxrm-btn:hover { background: var(--surface-hover, rgba(0, 0, 0, 0.05)); }
+.rxrm-btn:active { transform: scale(0.98); }
+.rxrm-btn:disabled { opacity: 0.55; cursor: default; }
+.rxrm-btn.primary {
+  background: var(--accent, #0a6cff);
+  border-color: transparent;
+  color: var(--label-on-accent, #fff);
+}
+.rxrm-btn.primary:hover { background: var(--accent-hover, #2b81ff); }
+.rxrm-btn.danger { color: var(--semantic-red, #d70015); }
+.rxrm-btn.danger:hover { background: color-mix(in srgb, var(--semantic-red, #d70015) 10%, transparent); }
+.rxrm-btn.soft { background: var(--accent-soft, rgba(10, 108, 255, 0.12)); border-color: transparent; color: var(--accent, #0a6cff); }
+.rxrm-btn.small { height: 26px; padding: 0 10px; font-size: 12px; }
+
+.rxrm-meta {
+  display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; row-gap: 4px; gap: 10px;
+  margin-top: 10px;
+  font: var(--font-caption, 400 11.5px/1.4 system-ui);
+  color: var(--label-tertiary, rgba(0, 0, 0, 0.38));
+}
+.rxrm-scope { font-family: var(--font-mono, ui-monospace, monospace); }
+
+/* ── 表单（登录 / 加用户） ── */
+.rxrm-form { display: flex; flex-direction: column; gap: 8px; }
+.rxrm-input {
+  width: 100%;
+  height: var(--control-h-lg, 36px);
+  padding: 0 11px;
+  border-radius: var(--radius-field, 8px);
+  border: 1px solid var(--stroke-control, rgba(0, 0, 0, 0.14));
+  background: var(--surface-card, #fff);
+  color: var(--label-primary, #111);
+  font: var(--font-body, 13.5px/1.4 system-ui);
+  outline: none;
+}
+.rxrm-input:focus {
+  border-color: var(--accent, #0a6cff);
+  box-shadow: 0 0 0 3px var(--accent-ring, rgba(10, 108, 255, 0.24));
+}
+
+/* ── 面板列表 ── */
+.rxrm-section { margin-top: 14px; }
+.rxrm-section:first-child { margin-top: 4px; }
+.rxrm-section-t {
+  font: var(--font-status, 500 11px/1.35 system-ui);
+  letter-spacing: var(--tracking-caps, 0.05em);
+  color: var(--label-tertiary, rgba(0, 0, 0, 0.38));
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+.rxrm-empty {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-field, 8px);
+  background: var(--surface-sunken, rgba(0, 0, 0, 0.035));
+  font: var(--font-caption, 400 11.5px/1.5 system-ui);
+  color: var(--label-tertiary, rgba(0, 0, 0, 0.38));
+}
+.rxrm-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 10px;
+  border-radius: var(--radius-field, 8px);
+  background: var(--surface-card, #fff);
+  border: 1px solid var(--hairline, rgba(0, 0, 0, 0.07));
+  margin-bottom: 6px;
+}
+.rxrm-row-main { flex: 1; min-width: 0; }
+.rxrm-row-t { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.rxrm-row-app { font: var(--font-body, 400 13.5px/1.4 system-ui); font-weight: 600; }
+.rxrm-row-p {
+  margin-top: 2px;
+  font: var(--font-mono, 11.5px/1.45 ui-monospace, monospace);
+  color: var(--label-secondary, rgba(0, 0, 0, 0.6));
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rxrm-add { display: flex; gap: 8px; margin-top: 8px; }
+.rxrm-add .rxrm-input { flex: 1; }
+.rxrm-add .rxrm-btn { flex: none; }
+
+/* ── toast ── */
+.rxrm-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 84px;
+  transform: translate(-50%, 12px);
+  z-index: 950;
+  padding: 8px 14px;
+  border-radius: var(--radius-pill, 999px);
+  background: rgba(20, 20, 24, 0.86);
+  color: #fff;
+  font: var(--font-caption, 400 12px/1.4 system-ui);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--dur-base, 200ms), transform var(--dur-base, 200ms);
+}
+.rxrm-toast.in { opacity: 1; transform: translate(-50%, 0); }
+
+@media (max-width: 520px) {
+  .rxrm-head { padding: 14px 16px 8px; }
+  .rxrm-body { padding: 2px 16px 12px; }
+  .rxrm-foot { padding: 10px 16px 14px; }
+  .rxrm-btns { width: 100%; }
+  .rxrm-btns .rxrm-btn { flex: 1 1 auto; }
+  .rxrm-foot.between { flex-wrap: wrap; }
+}
+
+/* ── 菜单栏里的盾牌入口 ──
+ * 插在时钟前面，尺寸/圆角跟 .rx-status-item 对齐；桌面没加载时它不会出现。 */
+.rxrm-menu-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 20px;
+  margin-right: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  line-height: 1;
+  transition: background var(--dur-fast, 120ms) var(--ease-out, ease-out);
+}
+.rxrm-menu-btn:hover { background: var(--surface-hover, rgba(0, 0, 0, 0.07)); }
+.rxrm-menu-btn:active { background: var(--surface-active, rgba(0, 0, 0, 0.11)); }
+.rxrm-menu-ico { font-size: 13px; opacity: 0.78; }
+.rxrm-menu-btn:hover .rxrm-menu-ico { opacity: 1; }

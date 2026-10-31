@@ -39,6 +39,9 @@ function init(App) {
     const dir = stateDir();
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     const full = path.join(dir, rel);
+    // rel 可以是 users/<uid>/desktop.json 这样的多级路径 —— 目录不存在就建，
+    // 否则原子写的第一步就 ENOENT（这类错误看起来像「保存丢失」，很难查）
+    fs.mkdirSync(path.dirname(full), { recursive: true });
     const tmp = full + '.tmp.' + process.pid;
     fs.writeFileSync(tmp, JSON.stringify(obj, null, 2));
     const fd = fs.openSync(tmp, 'r+');
@@ -136,9 +139,15 @@ function init(App) {
   const procs = new Map(); // name -> child
 
   function spawn(app) {
+    // argv 优先于 cmd：带空格的路径、权限开关（--allow-fs-read=...）都不能靠
+    // 一个字符串 split(' ') 表达 —— 那会把 "a b" 拆成两个参数。cmd 保留给
+    // 老清单与人类可读的日志。
+    const argv = Array.isArray(app.argv) && app.argv.length
+      ? app.argv.map(String)
+      : app.cmd.split(' ');
     const child = cp.spawn(
-      app.cmd.split(' ')[0],
-      app.cmd.split(' ').slice(1),
+      argv[0],
+      argv.slice(1),
       {
         cwd: app.cwd,
         // app.env 允许 appex.json 声明额外环境变量（如 TERM_SHELL_ARGS），

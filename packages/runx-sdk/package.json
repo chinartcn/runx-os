@@ -1,0 +1,36 @@
+{
+  "name": "@runx/sdk",
+  "version": "0.1.0",
+  "description": "RunX 应用侧操作系统接口：文件、进程、网络，每一次调用都经过用户授权。零依赖。",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "runx",
+    "sdk",
+    "sandbox",
+    "permissions",
+    "uac",
+    "filesystem"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chinartcn/runx-os.git",
+    "directory": "packages/runx-sdk"
+  },
+  "scripts": {
+    "pack": "npm pack"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "license": "MIT"
+}

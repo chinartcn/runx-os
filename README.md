@@ -86,8 +86,12 @@ PORT=8080 node server.js   # 直接起内核 + 自定义端口
 RunX OS
 ├── server.js        NavExt 内核（静态服务 + 扩展系统 + 热重载）
 ├── os.js            特权层：受管进程 / 事件总线 / 文件系统护栏 / WS 原语
-├── .js/             8 个核心扩展（core:true，独享 ctx.os 特权通道）
+├── .js/             13 个扩展（12 个 core:true，独享 ctx.os 特权通道）
+│   ├── @runx-browser-api  浏览器能力层（探测 / 逐级降级 / 统一存储），唯一非 core
+│   ├── @runx-rights-manager 账号 / 授权 / UAC 审批 / 风险拦截（多用户）
+│   ├── @runx-administrator-mode 有限期提权票据（30 分钟自动失效 + 常驻红条）
 │   ├── @runx-supervisor   应用生命周期（启动 / 停止 / 重启 / autostart / 崩溃自愈）
+│   ├── @runx-node-safety  应用围栏（Node 权限模型 --permission）
 │   ├── @runx-pax          应用安装（tarball / 目录安全解包 → appex.json → apps.json）
 │   ├── @runx-mounts       挂载点（文档 §7）
 │   ├── @runx-event-bus    内核内事件总线（app:started / app:stopped / desktop:changed …）
@@ -95,7 +99,11 @@ RunX OS
 │   │   └── assets/        设计令牌 + Inter 可变字体（拉丁子集）
 │   ├── @runx-monitor      状态监视器（进程表 / 端口 / 事件流 / GC 统计，WS 实时推送）
 │   ├── @runx-files        文件管理器（浏览 / 预览 / 下载，写操作默认关闭）
-│   └── @runx-settings     全局设置（接管全部设置：内核级 + 桌面级统一面板）
+│   ├── @runx-settings     全局设置（接管全部设置：内核级 + 桌面级统一面板）
+│   └── @runx-x11          X11 图形应用（按需加载，探测不到后端时给安装建议）
+├── packages/
+│   ├── runx-host    应用侧桌面 API（@runx/host：通知 / 窗口 / 主题 / 总线）
+│   └── runx-sdk     应用侧 OS 接口（@runx/sdk：fs / proc / net，走审批）
 ├── apps/            已部署应用（当前内置 term）
 │   └── term/        RunX 真实交互式终端（script 伪 PTY + xterm.js）
 ├── var/runx/        运行时状态（apps.json / desktop.json / logs），gitignore
@@ -181,6 +189,53 @@ REST（均走 `/runx` 前缀）：
 | 列表 / 详情 | `GET /runx/apps` · `GET /runx/apps/:name` |
 | 启停 / 重启 | `POST /runx/apps/:name/start\|stop\|restart` |
 | 桌面图标 | `POST /runx/desktop/icons` |
+
+---
+
+## 权限、账号与围栏
+
+RunX 里的应用是一个普通 Node 进程 —— 默认能读 `~/.ssh`、能写 `/etc`、能起子进程。
+三个扩展把这套默认收窄：
+
+| 层 | 扩展 | 管什么 | 强制力 |
+|---|---|---|---|
+| 围栏 | `@runx-node-safety` | 进程能碰哪些目录、能不能起子进程 | **硬**（`--permission`，运行时拒绝） |
+| 审批 | `@runx-rights-manager` | 每次走 SDK 的调用要不要问用户 | 软（拦住 SDK 调用） |
+| 提权 | `@runx-administrator-mode` | 高危操作什么时候允许 | 30 分钟票据，到期自动失效 |
+
+应用侧用 `@runx/sdk` 发起调用，用 `@runx/host` 操作窗口：
+
+```js
+const rx = require('@runx/sdk');
+const txt = await rx.fs.read('/sdcard/notes/today.md');   // 第一次会弹框问
+```
+
+```json
+// appex.json：声明围栏边界（安装时进 apps.json）
+{
+  "permissions": ["fs.read:/sdcard/notes/**", "fs.write:./data/**"]
+}
+```
+
+```
+应用 → /runx/sdk/*（令牌）→ 认人 → 查授权
+                                ├─ 有 → 执行
+                                └─ 没有 → 桌面弹框（应用名 / 目标路径 / 风险等级）
+                                           ├─ 拒绝 / 超时 / 没人可问 → 403 + code
+                                           └─ 允许 → 执行（选「始终」则记住）
+```
+
+- **账号**：多用户，密码 scrypt 哈希，会话是签名 Cookie；每个用户一份授权表与桌面布局。
+  首个账号自动是管理员；本机回环默认免登录。
+- **风险分级**由服务端计算：私钥、系统目录、应用自身代码、起子进程 → 高危；
+  高危操作**不给「始终允许」**，且必须先开管理员模式。
+- **没有账号时**先在终端建一个（否则任何人打开页面都能抢先创建管理员）：
+  `node .js/@runx-rights-manager/cli.js add alice`
+
+细节见各扩展的 README：[rights-manager](.js/@runx-rights-manager/README.md) ·
+[node-safety](.js/@runx-node-safety/README.md) ·
+[administrator-mode](.js/@runx-administrator-mode/README.md) ·
+[sdk](packages/runx-sdk/README.md)
 
 ---
 
@@ -439,7 +494,9 @@ ETag 304 协商。内联的 CSS 在导出前会把相对 `url()` 改写成绝对
    PTY slave 路径（非 `/dev/pts` 环境、`stty` 不可用）时才退回重建会话。`GET /health` 的
    `resize` 字段可查实际走的是 `inplace` 还是 `respawn`。
 2. **Termux / Android 上的 `fs.watch` 不可靠**：`watch` 已内置防抖 + 基于 `fs.stat` 的降级轮询兜底。
-3. **单机单用户假设**：内核未内置鉴权；若要暴露到公网，请置于反向代理 + 鉴权之后。
+3. **鉴权是「够用」级别，不是「对外服务」级别**：已有账号体系与登录闸门，但本机回环默认免登录
+   （任何能在本机发 HTTP 的进程都能以管理员身份调 API）。多用户隔离的是授权与应用数据，不是
+   内核 UID。要暴露到公网，仍应置于反向代理 + 独立鉴权之后。
 4. **窗口「隐藏」状态不持久化**：`⌘H` 隐藏是**临时**操作，刷新后窗口会回来（这与最小化不同 ——
    最小化会记进 `desktop.windows`，刷新后它仍在 Dock 里）。理由是隐藏的语义就是「先收起来一下」，
    若它也持久化，用户重开页面会发现窗口「凭空少了」。
@@ -513,5 +570,5 @@ ETag 304 协商。内联的 CSS 在导出前会把相对 `url()` 改写成绝对
 - 本项目版权归 chinartcn，采用 **MIT 许可**。
 
 ```
-RunX OS = NavExt v2.8.3（内核）+ os.js（特权层）+ 5 个核心扩展 + 应用层
+RunX OS = NavExt v2.8.3（内核）+ os.js（特权层）+ 13 个扩展 + 应用层
 ```

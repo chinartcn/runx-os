@@ -24,6 +24,20 @@ const path = require('path');
 
 const ASSETS_PREFIX = API + '/desktop-assets/';
 
+/* 可选依赖：账号体系。没装 @runx-rights-manager 就是单用户，桌面照样能用。 */
+let Session = null;
+try { Session = require('../@runx-rights-manager/session'); } catch { Session = null; }
+
+/**
+ * 桌面的真相源文件。多用户时每个用户一份（users/<uid>/desktop.json）：
+ * 布局、壁纸、图标位置都该是「我的桌面」，而不是「这台机器的桌面」。
+ * 用 session 的 AsyncLocalStorage 判断当前请求是谁，所以调用点在 load()/save()
+ * 内部、藏在若干次 await 之后也没问题。
+ */
+function stateFile() {
+  return Session && Session.scopedStateFile ? Session.scopedStateFile('desktop.json') : 'desktop.json';
+}
+
 /** 白名单：只发前端资源，避免把扩展目录变成可浏览的文件系统 */
 const ASSET_MIME = {
   '.css': 'text/css; charset=utf-8',
@@ -189,12 +203,19 @@ module.exports = {
     const extDir = ctx.extDir;
 
     function load() {
-      const d = os.readState('desktop.json', null);
+      const file = stateFile();
+      let d = os.readState(file, null);
+      // 新用户第一次进来：把安装时种下的全局桌面当**模板**（图标、壁纸、主题），
+      // 但不继承窗口存档 —— 别人的窗口几何对他是噪音。第一次保存后就各自独立。
+      if ((!d || d.schema !== 1) && file !== 'desktop.json') {
+        const tpl = os.readState('desktop.json', null);
+        if (tpl && tpl.schema === 1) d = Object.assign({}, tpl, { windows: [] });
+      }
       return (d && d.schema === 1) ? d : defaultDesktop();
     }
     function save(d) {
       d.updated_at = Date.now();
-      os.writeState('desktop.json', d);
+      os.writeState(stateFile(), d);
       return d;
     }
     function findIcon(d, id) { return (d.icons || []).find((i) => i.id === id); }
@@ -763,7 +784,20 @@ module.exports = {
     S.serveAsset = serveAsset;
   },
 
+  /**
+   * 请求入口。整个处理过程包在「当前是谁」的上下文里 —— 这样 load()/save()
+   * 不必层层传 req，也能落到正确的用户目录（见 stateFile）。
+   */
   onRequest(req, url, ctx) {
+    // 内核调用时 this 是 undefined（严格模式下模块方法调用不绑定），所以这里
+    // 显式走 module.exports，不依赖 this
+    const run = () => module.exports.onRequestImpl(req, url, ctx);
+    if (Session && Session.runWith) return Session.runWith(req, run);
+    return run();
+  },
+
+  /* 下面这个名字不叫 onRequest，是为了让上面的包装保持十行以内 */
+  onRequestImpl(req, url, ctx) {
     const p = url.pathname;
     if (!p.startsWith(API)) return undefined;   // 其它 /runx/* 交给兄弟扩展
     if (!S) return undefined;

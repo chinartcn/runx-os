@@ -50,14 +50,37 @@ function appToken(name) {
 }
 
 /** 注入给应用的运行环境：名字、令牌、网关地址、自己的端口与数据目录 */
-function runxEnv(entry, cwd) {
+function runxEnv(entry, cwd, uid) {
   return {
     RUNX_APP_NAME: entry.name,
     RUNX_APP_TOKEN: appToken(entry.name),
     RUNX_GATEWAY: 'http://127.0.0.1:' + (process.env.PORT || 3000),
     RUNX_APP_PORT: entry.port ? String(entry.port) : '',
     RUNX_APP_DATA: path.join(cwd, entry.data_dir || 'data'),
+    // 启动者：应用的授权按这个人的账本算（broker 读 app-owners.json 校验）
+    RUNX_APP_USER: uid || '',
   };
+}
+
+/**
+ * 可选依赖：两个能力层扩展可能根本没装。
+ *
+ * require 失败不是错误 —— 删掉 @runx-node-safety 就是「没有围栏」，删掉
+ * @runx-rights-manager 就是「单用户」，supervisor 的职责不该跟着变。
+ */
+function safeRequire(rel) {
+  try { return require(rel); } catch { return null; }
+}
+const NodeSafety = safeRequire('../@runx-node-safety/policy');
+const Session = safeRequire('../@runx-rights-manager/session');
+
+/** 记录「这个应用是谁启动的」。broker 用同一份文件决定用谁的授权。 */
+function recordOwner(name, uid) {
+  if (!uid || !OSREF) return;
+  const m = OSREF.readState('app-owners.json', {}) || {};
+  if (m[name] === uid) return;
+  m[name] = uid;
+  OSREF.writeState('app-owners.json', m);
 }
 
 // 内存运行时：name -> { state, pid, started_at, restart_count, last_exit, ... }
@@ -85,6 +108,8 @@ module.exports = {
         return {
           state: rt.state, pid: rt.pid || null, started_at: rt.started_at || null,
           restart_count: rt.restart_count || 0, last_exit: rt.last_exit || null,
+          // 围栏与归属：/runx/apps 的调用方（桌面、CLI）据此显示「这个应用被关在笼子里」
+          fence: rt.fence || null, owner: rt.owner || null,
         };
       }
       return { state: 'stopped', pid: null, started_at: null, restart_count: 0, last_exit: null };
@@ -177,7 +202,8 @@ module.exports = {
       return false;
     }
 
-    function spawnApp(entry) {
+    function spawnApp(entry, opts) {
+      const o = opts || {};
       const rt = runtime.get(entry.name) || {};
       if (rt.state === 'running') return { error: 'already_running' };
 
@@ -195,23 +221,43 @@ module.exports = {
       if (!ctx.project.exists(rel)) return { error: 'cwd_missing', cwd };
       if (portInUse(entry.port, entry.name)) return { error: 'port_in_use', port: entry.port };
 
+      // 围栏：把清单里的 permissions 翻译成 --permission --allow-fs-* 等开关。
+      // 没有这个扩展 / Node 不支持 / 命令不是 node → plan 返回 applied:false，
+      // 我们照原样启动，并把「为什么没上围栏」记进运行时状态（/runx/safety 会报）。
+      const safetyConf = os.readState('safety.json', null) || {};
+      const exempt = entry.no_fence === true
+        || (Array.isArray(safetyConf.exempt) && safetyConf.exempt.includes(entry.name));
+      const plan = (NodeSafety && !exempt)
+        ? NodeSafety.plan(entry, safetyConf)
+        : { applied: false, reason: exempt ? '已豁免' : '未安装 @runx-node-safety' };
+
+      const owner = o.owner || (Session && Session.ownerUid ? Session.ownerUid() : null);
       const app = {
         name: entry.name,
         cmd: entry.cmd || 'node app.js',
+        argv: plan.applied ? plan.argv : undefined,
         cwd,
         port: entry.port,
         // appex.json 里的 env 在前，RUNX_* 在后：应用无法用静态配置覆盖
         // 自己的身份（否则改个 appex.json 就能冒充别的应用）。
-        env: Object.assign({}, entry.env || {}, runxEnv(entry, cwd)),
+        env: Object.assign({}, entry.env || {}, runxEnv(entry, cwd, owner)),
         onExit: (code, signal) => onExit(entry.name, code, signal),
       };
-      const r = os.spawn(app);
+      let r;
+      try {
+        r = os.spawn(app);
+      } catch (e) {
+        return { error: 'spawn_failed', message: e.message, fence: plan.applied };
+      }
       rt.state = 'running'; rt.pid = r.pid; rt.started_at = Date.now();
       rt.restart_count = rt.restart_count || 0; rt._restartTs = rt._restartTs || [];
+      rt.fence = plan.applied ? { flag: plan.flag, argv: plan.argv } : { applied: false, reason: plan.reason };
+      rt.owner = owner || null;
       runtime.set(entry.name, rt);
-      ctx.log(`已启动 ${entry.name} (pid=${r.pid}, port=${entry.port})`);
+      recordOwner(entry.name, owner);
+      ctx.log(`已启动 ${entry.name} (pid=${r.pid}, port=${entry.port}${plan.applied ? ', 围栏开' : ''})`);
       os.ipc.emit('app:started', entry.name);
-      return { ok: true, pid: r.pid, port: r.port, started_at: rt.started_at };
+      return { ok: true, pid: r.pid, port: r.port, started_at: rt.started_at, fence: plan.applied };
     }
 
     function terminateApp(name, force) {
@@ -329,7 +375,9 @@ module.exports = {
     if (method === 'POST' && action === 'start') {
       const entry = S.getEntry(name);
       if (!entry) return S.err(404, '应用不存在');
-      const r = S.spawnApp(entry);
+      // 谁点的启动，应用就归谁的授权 —— 授权不是「机器上所有人共用一份」
+      const u = Session && Session.userFromRequest ? Session.userFromRequest(req) : null;
+      const r = S.spawnApp(entry, { owner: u ? u.id : null });
       if (r.error === 'already_running') return S.err(409, '应用已在运行');
       if (r.error === 'cwd_missing') return S.err(422, 'cwd 不存在', { cwd: r.cwd });
       if (r.error === 'port_in_use') return S.err(409, '端口被占用', { port: r.port });
@@ -354,7 +402,8 @@ module.exports = {
       const rt = runtime.get(name);
       if (rt) { rt.restart_count = 0; rt._restartTs = []; } // 主动重启清空预算
       return S.terminateApp(name, true).then(() => {
-        S.spawnApp(entry);
+        const u = Session && Session.userFromRequest ? Session.userFromRequest(req) : null;
+        S.spawnApp(entry, { owner: u ? u.id : null });
         const r2 = runtime.get(name);
         return S.json(200, { pid: r2 ? r2.pid : null, port: entry.port, started_at: r2 ? r2.started_at : null });
       });

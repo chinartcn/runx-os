@@ -1,6 +1,9 @@
 [
   "@runx-browser-api",
+  "@runx-rights-manager",
+  "@runx-administrator-mode",
   "@runx-supervisor",
+  "@runx-node-safety",
   "@runx-pax",
   "@runx-mounts",
   "@runx-event-bus",

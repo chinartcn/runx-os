@@ -1,0 +1,10 @@
+{
+  "name": "应用围栏（RunX 扩展）",
+  "description": "用 Node 18+ 的权限模型（--permission / --experimental-permission）给每个应用划出可读可写的边界，把清单里的 permissions 翻译成启动参数。",
+  "version": "0.1.0",
+  "author": "chinartcn",
+  "enabled": true,
+  "core": true,
+  "order": 30,
+  "requires": []
+}
