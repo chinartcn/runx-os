@@ -97,3 +97,14 @@ body.theme-light {
   --fg: #1c2436;
   --fg-dim: #5a6478;
 }
+
+/* ── iOS 聚焦放大防护 ────────────────────────────────────────────────
+   移动浏览器在聚焦输入控件时，若控件字号 <16px 会自动放大整页（Safari
+   的「聚焦缩放」）。开「桌面版网站」时 meta viewport 里的
+   user-scalable=no / maximum-scale 会被浏览器忽略，拦不住；唯一稳定
+   的开关就是让**真正承载焦点的那个元素**字号 ≥16px。
+
+   xterm 的 .xterm-helper-textarea 就是它：opacity:0、left:-9999em、
+   宽高由 xterm 内联定位，看不见也不参与排版 —— 改字号不影响终端渲染，
+   只是不再触发自动放大。 */
+.xterm .xterm-helper-textarea { font-size: 16px; }

@@ -1345,3 +1345,30 @@
   z-index: 9999;
   background: var(--surface, #fff);
 }
+
+/* ── iOS 聚焦放大防护 ────────────────────────────────────────────────
+   移动浏览器聚焦输入控件时会自动放大整页，条件是控件实际字号 <16px。
+   开「桌面版网站」时 meta viewport 的 user-scalable=no / maximum-scale
+   会被忽略，拦不住浏览器 —— 所以从控件字号这一侧关掉触发条件。
+
+   用「无 hover + 粗指针」限定移动端：桌面 Chrome/Firefox 不做聚焦缩放，
+   没必要为了它把面板里的输入框全部放大一号。 */
+@media (hover: none) and (pointer: coarse) {
+  #runx-desktop input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  #runx-desktop textarea,
+  #runx-desktop select {
+    font-size: 16px;
+  }
+}
+
+/* ── 缩放期间临时关掉毛玻璃 ──────────────────────────────────────────
+   见 client.js 的 markZoomActivity()：pinch / 聚焦放大时 backdrop-filter
+   会随缩放每帧重新采样背景，桌面上每个图标 emoji 一层 blur(8px)，叠加起来
+   足以把移动端帧率打到个位数。data-zooming 只在手势期间存在，停顿后自动
+   移除，静态外观与原来完全一致。 */
+#runx-desktop[data-zooming="1"] .rx-icon .rx-emoji,
+#runx-desktop[data-zooming="1"] .rx-win-veil,
+#runx-desktop[data-zooming="1"] .rx-vscreen-badge {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}

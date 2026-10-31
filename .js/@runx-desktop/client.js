@@ -391,15 +391,58 @@
    *  进去的值」，形成自我引用。键盘弹起时 vv.height 变小 → 写进 root.style.height
    *  → 键盘收起后 vv.height 恢复，但 Math.min(vv.height, root.clientHeight) 仍被
    *  那个旧的小值钳住，桌面永远缩不回满屏（下端露出宿主背景）。
-   *  innerHeight 是布局视口本身，不受我们设置的元素样式影响，可安全作基准。 */
+   *  innerHeight 是布局视口本身，不受我们设置的元素样式影响，可安全作基准。
+   *
+   *  ⚠ vv.width/height 是**视觉**视口，不是布局视口：捏合放大 2 倍时它们
+   *  会变成布局宽高的一半。必须乘回 vv.scale 才是布局尺寸 —— 否则「放大
+   *  看清细节」会被误判成「屏幕变小了」，逻辑桌面跟着缩水、窗口重新夹取，
+   *  视觉上就是「一边放大一边整页重排」。键盘弹起时 scale≈1，这一步是
+   *  恒等变换，仍按 vv 缩小可用高度。 */
   function physViewport() {
     var vv = window.visualViewport;
     var lw = window.innerWidth;
     var lh = window.innerHeight;
     if (vv && vv.width && vv.height) {
-      return { w: Math.min(vv.width, lw), h: Math.min(vv.height, lh) };
+      var s = vv.scale || 1;
+      var w = vv.width * s;          // 换算回布局 CSS 像素
+      var h = vv.height * s;
+      return { w: Math.min(w, lw), h: Math.min(h, lh) };
     }
     return { w: lw, h: lh };
+  }
+
+  /**
+   * 当前是否处于「用户主动视觉缩放」状态（捏合缩放 / 双击放大 / 聚焦输入框
+   * 触发的自动放大）。
+   *
+   * 判定只看 vv.scale：它从 1 变成 1.4 时，布局视口（innerWidth/Height）并
+   * 没有变，变的只是「眼睛凑近了」。这时任何按 vv 重排都会让桌面跟着缩放
+   * 级别一起动。桌面版网站模式下 Safari/Chrome 会忽略 meta viewport
+   * 的 user-scalable=no，聚焦输入框照样放大 —— 拦不住浏览器，但至少能
+   * 保证**我们自己的界面不动**。
+   */
+  function visualZoomed() {
+    var vv = window.visualViewport;
+    return !!(vv && vv.scale && Math.abs(vv.scale - 1) > 0.001);
+  }
+
+  /**
+   * 视觉缩放期间还要不要重排：唯一例外是**软键盘真的占位了**。
+   * 把 vv 高度换算回布局高度若明显变矮（键盘通常 250–400px），说明这不是
+   * 纯缩放而是可用区真的少了，该让窗口缩上去；否则锁死布局。
+   */
+  function zoomWithKeyboard() {
+    if (!visualZoomed()) return false;
+    var vv = window.visualViewport;
+    var s = vv.scale || 1;
+    var h = (vv.height || 0) * s;
+    var lh = window.innerHeight || 0;
+    return !!(lh > 0 && h > 0 && h < lh - 120);
+  }
+
+  /** 当前要不要「把布局钉死」：视觉缩放中、且不是键盘占位。 */
+  function shouldHoldLayout() {
+    return visualZoomed() && !zoomWithKeyboard();
   }
   /**
    * 手机上的分辨率回退：以下情况本地回退为「自适应」——
@@ -601,10 +644,13 @@
       root.style.right = 'auto'; root.style.bottom = 'auto';
       return;
     }
-    // 键盘顶起时 offsetTop>0，把桌面下移对齐可视区顶部，窗口不被键盘盖住；
-    // 用较小视口尺寸避免桌面版网站下把桌面撑出屏幕。
-    root.style.left = (vv.offsetLeft || 0) + 'px';
-    root.style.top = (vv.offsetTop || 0) + 'px';
+    // 键盘顶起时 offsetTop>0，把桌面下移对齐可视区顶部，窗口不被键盘盖住。
+    // ⚠ 视觉缩放时 offsetTop/Left 是**滚动位置**（浏览器把视口挪到手指/输入框
+    // 那里），照着它平移会把整个桌面推着走 —— 那正是「一放大界面就跑」的另一半
+    // 原因。缩放期间钉在布局原点，位移交给浏览器做纯视觉处理。
+    var shift = !visualZoomed();
+    root.style.left = (shift ? (vv.offsetLeft || 0) : 0) + 'px';
+    root.style.top = (shift ? (vv.offsetTop || 0) : 0) + 'px';
     root.style.width = pv.w + 'px';
     root.style.height = pv.h + 'px';
     root.style.right = 'auto';
@@ -3416,7 +3462,8 @@
    * （手机旋屏 / 软键盘弹起 / 地址栏伸缩都会触发，不止 resize）
    * ═══════════════════════════════════════════════════════════════════ */
   /**
-   * 捏合缩放（pinch zoom）/ 双击缩放只改变**视觉放大倍数**，不该让布局重排。
+   * 捏合缩放（pinch zoom）/ 双击缩放 / 聚焦输入框放大只改变**视觉放大倍数**，
+   * 不该让布局重排。
    *
    * 以前 visualViewport 的 resize 一律触发 relayout，于是手机上双指一捏：
    * vv.width 变小 → physViewport() 变小 → 逻辑桌面被重算、窗口被重新夹取，
@@ -3425,23 +3472,19 @@
    *
    * 所以这里区分两类变化：
    *   · 布局视口尺寸变了（旋屏、窗口拉伸）→ innerWidth/Height 变化 → 必须重排
-   *   · vv.scale 变了、布局视口没变 → 纯缩放 → **不重排**，布局钉死
+   *   · vv.scale ≠ 1、布局视口没变 → 纯缩放 → **不重排**，布局钉死
    * 键盘弹起/地址栏收起是第三类：scale 不变、vv.height 变小 → 照常重排。
+   *
+   * ⚠ 光在「scale 刚变化的那一帧」返回是不够的：浏览器在放大之后还会补发
+   *   scroll/resize（滚到输入框、地址栏动画），这些事件里 scale 已经稳定，
+   *   以前会被当成「普通变化」全量重排一次 —— 桌面照样塌掉。所以只要
+   *   **当前仍处于缩放状态**，就一律 no-op；等 scale 回到 1 再补一次重排。
    */
-  var _lastRelayoutScale = (window.visualViewport && window.visualViewport.scale) || 1;
-  var _lastRelayoutLayout = { w: window.innerWidth || 0, h: window.innerHeight || 0 };
   var resizeTimer = null;
   function relayout() {
-    var vv = window.visualViewport;
-    var s = (vv && vv.scale) || 1;
-    var lw = window.innerWidth || 0, lh = window.innerHeight || 0;
-
-    var layoutChanged = (lw !== _lastRelayoutLayout.w || lh !== _lastRelayoutLayout.h);
-    if (layoutChanged) _lastRelayoutLayout = { w: lw, h: lh };
-
-    var zoomChanged = Math.abs(s - _lastRelayoutScale) > 0.001;
-    _lastRelayoutScale = s;
-    if (zoomChanged && !layoutChanged) return;      // 纯缩放：布局不动
+    // 视觉缩放期间：布局完全钉死。唯一例外是软键盘真的占位了（见
+    // zoomWithKeyboard），那种情况可用区确实变小，窗口该缩上去。
+    if (shouldHoldLayout()) return;
 
     // 先重算虚拟显示器的缩放与居中、把桌面钉到真实可视区，
     // 再按新的可用区夹取窗口 —— 顺序反了会用旧坐标系算出错误位置。
@@ -3464,12 +3507,38 @@
     resizeTimer = setTimeout(relayout, safeMs(140, 140, 60, 800));
   }
   window.addEventListener('resize', scheduleRelayout);
+  /* 缩放期间临时降级毛玻璃。
+     backdrop-filter 每次视觉缩放都要重新采样背景，而桌面上**每个图标 emoji**
+     都挂了一层 blur(8px) —— 真机双指一捏就是几十个模糊层同时重绘，这是卡顿
+     的第二个来源（第一个是按 vv 重排）。手势期间换成纯半透明底，停顿 240ms
+     后恢复：静态时模糊只算一次，代价可以忽略。 */
+  var zoomIdleTimer = null;
+  function markZoomActivity() {
+    if (!visualZoomed()) return;
+    if (root.dataset.zooming !== '1') root.dataset.zooming = '1';
+    clearTimeout(zoomIdleTimer);
+    zoomIdleTimer = setTimeout(function () {
+      zoomIdleTimer = null;
+      delete root.dataset.zooming;
+    }, 240);
+  }
   // 软键盘弹起/收起、地址栏伸缩：visualViewport 比 window.resize 更可靠
   var _vv = window.visualViewport;
   if (_vv) {
-    _vv.addEventListener('resize', scheduleRelayout);
+    // 捏合过程中 vv 每帧都在 resize/scroll：这里直接不排程，连防抖定时器
+    // 都不创建 —— 手势期间零布局工作，才不卡。等 scale 回 1 时事件照常进来，
+    // 补一次重排把可能变化的键盘状态对齐。
+    _vv.addEventListener('resize', function () {
+      markZoomActivity();
+      if (shouldHoldLayout()) return;
+      scheduleRelayout();
+    });
     // 键盘顶起时可视区被推高 → offsetTop 变化，触发 scroll（不是 resize）
-    _vv.addEventListener('scroll', scheduleRelayout);
+    _vv.addEventListener('scroll', function () {
+      markZoomActivity();
+      if (shouldHoldLayout()) return;
+      scheduleRelayout();
+    });
   }
   window.addEventListener('orientationchange', scheduleRelayout);
 
